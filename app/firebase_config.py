@@ -14,3 +14,4 @@ firebaseConfig = {
 cred = credentials.Certificate("serviceAccountKey.json")
 firebase_admin.initialize_app(cred)
 
+
