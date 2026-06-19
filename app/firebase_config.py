@@ -1,6 +1,3 @@
-import firebase_admin
-from firebase_admin import credentials, auth
-
 firebaseConfig = {
     "apiKey": "AIzaSyCjDmBqoUBAhhqAQ3Y46KzQET2AUU0TtrA",
     "authDomain": "godmode-app.firebaseapp.com",
