@@ -6,9 +6,6 @@ firebaseConfig = {
     "messagingSenderId": "832029650032",
     "appId": "1:832029650032:web:caef5a08835a2c0b1558b5",
     "measurementId": "G-P9RQLPRZ5Q"
-}
-
-cred = credentials.Certificate("serviceAccountKey.json")
-firebase_admin.initialize_app(cred)
+{
 
 
