@@ -5,3 +5,5 @@ pydantic==2.6.4
 python-multipart==0.0.9
 passlib[bcrypt]
 python-jose
+email-validator==2.3.0
+httpx==0.27.2
