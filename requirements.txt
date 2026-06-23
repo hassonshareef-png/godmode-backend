@@ -3,5 +3,7 @@ uvicorn[standard]
 sqlalchemy
 python-jose
 python-multipart
-passlib[bcrypt]
+passlib
+argon2-cffi
+
 
