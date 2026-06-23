@@ -1,113 +1,98 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
-import random
+from sqlalchemy.orm import Session
 
-app = FastAPI()
+from .database import Base, engine, SessionLocal
+from .models import User
+from .auth import hash_password, verify_password, create_access_token
+
+# Create DB tables
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="GODMODE Backend")
 
 # ===============================
-# CORS (Fixes Network Error)
+# CORS (Required for Frontend)
 # ===============================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://godmode-frontend.onrender.com",
+        "https://godmode-frontend-l.onrender.com"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ===============================
+# DB Dependency
+# ===============================
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# ===============================
 # MODELS
 # ===============================
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    tier: str = "god"
 
 class LoginRequest(BaseModel):
-    username: str
+    email: str
     password: str
 
-class PredictRequest(BaseModel):
-    god: bool = False
-    universe: bool = False
-
-class PickRequest(BaseModel):
-    number: str
-
-class DirectorRequest(BaseModel):
-    seed: Optional[str] = None
-
+# ===============================
+# HEALTH CHECK
+# ===============================
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 # ===============================
-# LOGIN (Matches Frontend)
+# SIGNUP
 # ===============================
-@app.post("/login")
-def login(req: LoginRequest):
-    if req.username == "admin" and req.password == "8118":
-        return {"god": True, "universe": True}
-    return {"error": "Invalid username or password"}
+@app.post("/auth/signup")
+def signup(payload: SignupRequest, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
 
+    user = User(
+        email=payload.email,
+        hashed_password=hash_password(payload.password),
+        tier=payload.tier,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {"id": user.id, "email": user.email, "tier": user.tier}
 
 # ===============================
-# PREDICT (Matches Frontend)
+# LOGIN
 # ===============================
-@app.post("/predict")
-def predict(req: PredictRequest):
-    # Simple prediction engine
-    nums = sorted(random.sample(range(0, 10), 3))
-    return {"prediction": "".join(str(n) for n in nums)}
+@app.post("/auth/login")
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
 
+    if not user or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
 
-# ===============================
-# DIRECTOR (Matches Frontend)
-# ===============================
-@app.post("/director")
-def director(req: DirectorRequest):
-    drift = random.choice([-2, -1, 0, 1, 2])
-    base = [7, 14, 22, 31, 36]
-    base = [max(1, min(39, n + drift)) for n in base]
-
-    if req.seed:
-        try:
-            seed_num = int(req.seed)
-        except:
-            seed_num = 0
-        base = [max(1, min(39, n + (seed_num % 10))) for n in base]
-
-    base = sorted(set(base))
+    token = create_access_token({"sub": str(user.id), "tier": user.tier})
 
     return {
-        "output": f"Compiled Prediction → {base} | Drift {drift} | Seed {req.seed or 'none'}",
-        "numbers": base
-    }
-
-
-# ===============================
-# PICK 3 (Matches Frontend)
-# ===============================
-@app.post("/pick3")
-def pick3(req: PickRequest):
-    if len(req.number) != 3 or not req.number.isdigit():
-        return {"error": "Pick3 requires exactly 3 digits."}
-
-    digits = [int(d) for d in req.number]
-    s = sum(digits)
-
-    return {
-        "result": f"Pick 3 Engine → digits={digits}, sum={s}, root={s % 10}"
-    }
-
-
-# ===============================
-# PICK 4 (Matches Frontend)
-# ===============================
-@app.post("/pick4")
-def pick4(req: PickRequest):
-    if len(req.number) != 4 or not req.number.isdigit():
-        return {"error": "Pick4 requires exactly 4 digits."}
-
-    digits = [int(d) for d in req.number]
-    s = sum(digits)
-
-    return {
-        "result": f"Pick 4 Engine → digits={digits}, sum={s}, root={s % 10}"
+        "access_token": token,
+        "token_type": "bearer",
+        "tier": user.tier
     }
 
