@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
+import os
 from typing import Optional
 
 from jose import jwt
 from passlib.context import CryptContext
 
-SECRET_KEY = "CHANGE_THIS_TO_A_RANDOM_SECRET"
+SECRET_KEY = os.getenv("SECRET_KEY", "fallback-only-for-dev")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
