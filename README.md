@@ -38,6 +38,9 @@ FastAPI backend for user authentication and tier access, designed to run locally
 | `ALLOWED_ORIGINS` | Comma-separated list of allowed frontend origins (e.g. `https://yourapp.com`). Defaults to `http://localhost:3000`. |
 | `STRIPE_SECRET_KEY` | Your Stripe secret key (`sk_live_...` or `sk_test_...`). |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret from your Stripe webhook endpoint (`whsec_...`). |
+| `OWNER_USERNAME` | Optional owner login username. If set with `OWNER_PASSWORD`, owner account is auto-provisioned as `director`. |
+| `OWNER_PASSWORD` | Optional owner login password (set only in secure environment variables, never in code). |
+| `OWNER_EMAIL` | Optional owner account email. Defaults to `<OWNER_USERNAME>@owner.local` when omitted. |
 
 Optional Firebase values if used:
 - `FIREBASE_API_KEY`
@@ -63,6 +66,21 @@ Register your webhook URL in **Stripe Dashboard → Developers → Webhooks**:
 - Endpoint URL: `https://your-render-url.onrender.com/stripe/webhook`
 - Events to listen for: `checkout.session.completed`
 - Copy the **Signing secret** (`whsec_...`) and set it as `STRIPE_WEBHOOK_SECRET` in Render.
+
+## Owner access setup (director mode)
+
+To configure a private owner login without affecting normal user logins:
+
+1. Set these Render environment variables:
+   - `OWNER_USERNAME`
+   - `OWNER_PASSWORD`
+   - (optional) `OWNER_EMAIL`
+2. Restart the service.
+3. Log in through `POST /auth/login` using:
+   - `email`: your owner username (for example `hass`)
+   - `password`: your owner password
+
+When configured, the backend auto-creates/updates this owner account with tier `director`.
 
 ## Existing database migration
 

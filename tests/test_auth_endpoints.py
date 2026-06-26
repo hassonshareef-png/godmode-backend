@@ -11,6 +11,9 @@ class AuthEndpointsTests(unittest.TestCase):
     def setUpClass(cls):
         os.environ["DATABASE_URL"] = "sqlite:////tmp/godmode_backend_test.db"
         os.environ["SECRET_KEY"] = "test-secret-key"
+        os.environ["OWNER_USERNAME"] = "hass"
+        os.environ["OWNER_PASSWORD"] = "ownerpass123"
+        os.environ["OWNER_EMAIL"] = "owner@example.com"
 
         import app.main
 
@@ -35,6 +38,7 @@ class AuthEndpointsTests(unittest.TestCase):
 
     def setUp(self):
         self._clear_users()
+        self.main_module.ensure_owner_account()
         # Reset in-memory rate limit counters so tests don't interfere with each other
         self.main_module.limiter.reset()
         self.db = self.main_module.SessionLocal()
@@ -146,6 +150,14 @@ class AuthEndpointsTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             self.main_module.get_current_user(token=reset_token, db=self.db)
         self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_owner_can_login_with_username_and_get_director_tier(self):
+        login = self._login(email="hass", pw_text="ownerpass123")
+        self.assertEqual(login["tier"], "director")
+        current_user = self.main_module.get_current_user(token=login["access_token"], db=self.db)
+        me = self.main_module.me(user=current_user)
+        self.assertEqual(me["tier"], "director")
+        self.assertEqual(me["email"], "owner@example.com")
 
 
 if __name__ == "__main__":

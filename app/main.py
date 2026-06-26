@@ -27,6 +27,9 @@ Base.metadata.create_all(bind=engine)
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+OWNER_USERNAME = os.getenv("OWNER_USERNAME", "").strip().lower()
+OWNER_PASSWORD = os.getenv("OWNER_PASSWORD", "")
+OWNER_EMAIL = os.getenv("OWNER_EMAIL", "").strip().lower()
 
 VALID_TIERS = {"god", "universe", "director"}
 
@@ -55,6 +58,44 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def get_owner_email() -> str:
+    if OWNER_EMAIL:
+        return OWNER_EMAIL
+    if OWNER_USERNAME:
+        return f"{OWNER_USERNAME}@owner.local"
+    return ""
+
+
+def ensure_owner_account() -> None:
+    if not OWNER_USERNAME or not OWNER_PASSWORD:
+        return
+
+    owner_email = get_owner_email()
+    if not owner_email:
+        return
+
+    db = SessionLocal()
+    try:
+        owner = db.query(User).filter(User.email == owner_email).first()
+        owner_password_hash = hash_password(OWNER_PASSWORD)
+        if owner:
+            owner.hashed_password = owner_password_hash
+            owner.tier = "director"
+        else:
+            owner = User(
+                email=owner_email,
+                hashed_password=owner_password_hash,
+                tier="director",
+            )
+            db.add(owner)
+        db.commit()
+    finally:
+        db.close()
+
+
+ensure_owner_account()
 
 
 class SignupRequest(BaseModel):
@@ -154,7 +195,12 @@ def signup(
 def login(
     payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.email == payload.email.lower()).first()
+    identifier = payload.email.strip().lower()
+    owner_email = get_owner_email()
+    if OWNER_USERNAME and owner_email and identifier == OWNER_USERNAME:
+        user = db.query(User).filter(User.email == owner_email).first()
+    else:
+        user = db.query(User).filter(User.email == identifier).first()
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
