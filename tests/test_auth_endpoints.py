@@ -3,6 +3,7 @@ import os
 import unittest
 
 from fastapi import HTTPException
+from starlette.requests import Request
 
 
 class AuthEndpointsTests(unittest.TestCase):
@@ -43,13 +44,24 @@ class AuthEndpointsTests(unittest.TestCase):
         payload = self.main_module.SignupRequest.model_validate(
             {"email": email, "password": pw_text, "tier": tier}
         )
-        return self.main_module.signup(payload, db=self.db)
+        return self.main_module.signup(payload, self._request(), db=self.db)
 
     def _login(self, email="user@example.com", pw_text="cred12345"):
         payload = self.main_module.LoginRequest.model_validate(
             {"email": email, "password": pw_text}
         )
-        return self.main_module.login(payload, db=self.db)
+        return self.main_module.login(payload, self._request(), db=self.db)
+
+    def _request(self):
+        return Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+            }
+        )
 
     def test_ping_endpoint(self):
         body = self.main_module.ping()
@@ -76,14 +88,23 @@ class AuthEndpointsTests(unittest.TestCase):
         self._signup(email="reset@example.com", pw_text="cred56789")
 
         forgot_payload = self.main_module.ForgotPasswordRequest(email="reset@example.com")
-        forgot = self.main_module.forgot_password(forgot_payload, db=self.db)
-        token = forgot["reset_token"]
+        forgot = self.main_module.forgot_password(forgot_payload, self._request(), db=self.db)
+        self.assertEqual(
+            forgot,
+            {
+                "message": "If this email is registered, a password reset link has been sent."
+            },
+        )
+        user_obj = self.db.query(self.main_module.User).filter_by(email="reset@example.com").first()
+        token = user_obj.reset_token
+        self.assertIsNotNone(token)
 
         reset_payload = self.main_module.ResetPasswordRequest(
             token=token, new_password="newcred123"
         )
         reset = self.main_module.reset_password(reset_payload, db=self.db)
         self.assertEqual(reset["message"], "Password reset successful")
+        self.assertIsNone(user_obj.reset_token)
 
         with self.assertRaises(HTTPException) as old_login_err:
             self._login(email="reset@example.com", pw_text="cred56789")
@@ -94,9 +115,11 @@ class AuthEndpointsTests(unittest.TestCase):
 
     def test_forgot_password_unknown_email(self):
         payload = self.main_module.ForgotPasswordRequest(email="missing@example.com")
-        with self.assertRaises(HTTPException) as ctx:
-            self.main_module.forgot_password(payload, db=self.db)
-        self.assertEqual(ctx.exception.status_code, 404)
+        body = self.main_module.forgot_password(payload, self._request(), db=self.db)
+        self.assertEqual(
+            body,
+            {"message": "If this email is registered, a password reset link has been sent."},
+        )
 
     def test_reset_rejects_non_reset_token(self):
         self._signup(email="wrongtype@example.com", pw_text="cred56789")

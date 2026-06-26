@@ -1,10 +1,15 @@
 from datetime import datetime, timezone
+import os
 
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, ExpiredSignatureError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, SessionLocal
@@ -20,14 +25,20 @@ from .auth import (
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="GODMODE Backend")
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # later: restrict to your frontend URL
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SlowAPIMiddleware)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
@@ -45,6 +56,13 @@ class SignupRequest(BaseModel):
     password: str
     tier: str = "god"
 
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if len(value) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        return value
+
 
 class LoginRequest(BaseModel):
     email: str
@@ -58,6 +76,13 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        if len(value) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        return value
 
 
 @app.get("/health")
@@ -96,7 +121,10 @@ def get_current_user(
 
 
 @app.post("/auth/signup")
-def signup(payload: SignupRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def signup(
+    payload: SignupRequest, request: Request, db: Session = Depends(get_db)
+):
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -113,7 +141,10 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/auth/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def login(
+    payload: LoginRequest, request: Request, db: Session = Depends(get_db)
+):
     user = db.query(User).filter(User.email == payload.email).first()
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(
@@ -131,18 +162,26 @@ def me(user: User = Depends(get_current_user)):
 
 
 @app.post("/auth/forgot-password")
-def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    generic_message = {
+        "message": "If this email is registered, a password reset link has been sent."
+    }
     user = db.query(User).filter(User.email == payload.email).first()
     if not user:
-        raise HTTPException(status_code=404, detail="Email not found")
+        return generic_message
 
     reset_token = create_access_token(
         {"sub": str(user.id), "type": "password_reset"}, expires_minutes=15
     )
-    return {
-        "message": "In production, this would be emailed to you",
-        "reset_token": reset_token,
-    }
+    user.reset_token = reset_token
+    db.add(user)
+    db.commit()
+    return generic_message
 
 
 @app.post("/auth/reset-password")
@@ -169,8 +208,11 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
     user = db.query(User).filter(User.id == parsed_user_id).first()
     if not user:
         raise HTTPException(status_code=400, detail="User not found for token")
+    if payload.token != user.reset_token:
+        raise HTTPException(status_code=400, detail="Invalid reset token")
 
     user.hashed_password = hash_password(payload.new_password)
+    user.reset_token = None
     db.add(user)
     db.commit()
 
