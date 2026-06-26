@@ -1,10 +1,10 @@
-fastapi
-uvicorn[standard]
-sqlalchemy
-python-jose
-python-multipart
-passlib
-argon2-cffi
-# force rebuild
-
-
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+sqlalchemy>=2.0.0
+python-jose[cryptography]>=3.3.0
+python-multipart>=0.0.9
+passlib[argon2]>=1.7.4
+argon2-cffi>=23.1.0
+pydantic>=2.0.0
+psycopg2-binary>=2.9.9
+email-validator>=2.1.0

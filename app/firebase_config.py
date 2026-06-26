@@ -1,11 +1,11 @@
+import os
+
 firebaseConfig = {
-    "apiKey": "AIzaSyCjDmBqoUBAhhqAQ3Y46KzQET2AUU0TtrA",
-    "authDomain": "godmode-app.firebaseapp.com",
-    "projectId": "godmode-app",
-    "storageBucket": "godmode-app.firebasestorage.app",
-    "messagingSenderId": "832029650032",
-    "appId": "1:832029650032:web:caef5a08835a2c0b1558b5",
-    "measurementId": "G-P9RQLPRZ5Q"
-{
-
-
+    "apiKey": os.getenv("FIREBASE_API_KEY"),
+    "authDomain": os.getenv("FIREBASE_AUTH_DOMAIN"),
+    "projectId": os.getenv("FIREBASE_PROJECT_ID"),
+    "storageBucket": os.getenv("FIREBASE_STORAGE_BUCKET"),
+    "messagingSenderId": os.getenv("FIREBASE_MESSAGING_SENDER_ID"),
+    "appId": os.getenv("FIREBASE_APP_ID"),
+    "measurementId": os.getenv("FIREBASE_MEASUREMENT_ID"),
+}
