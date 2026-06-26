@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import os
 
+import stripe
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
@@ -23,6 +24,11 @@ from .auth import (
 )
 
 Base.metadata.create_all(bind=engine)
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+
+VALID_TIERS = {"god", "universe", "director"}
 
 app = FastAPI(title="GODMODE Backend")
 limiter = Limiter(key_func=get_remote_address)
@@ -104,6 +110,9 @@ def get_current_user(
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Reject password-reset tokens from being used as access tokens
+        if payload.get("type") == "password_reset":
+            raise credentials_exception
         user_id = payload.get("sub")
         if user_id is None:
             raise credentials_exception
@@ -125,12 +134,12 @@ def get_current_user(
 def signup(
     payload: SignupRequest, request: Request, db: Session = Depends(get_db)
 ):
-    existing = db.query(User).filter(User.email == payload.email).first()
+    existing = db.query(User).filter(User.email == payload.email.lower()).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     user = User(
-        email=payload.email,
+        email=payload.email.lower(),
         hashed_password=hash_password(payload.password),
         tier=payload.tier,
     )
@@ -145,7 +154,7 @@ def signup(
 def login(
     payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.email == payload.email).first()
+    user = db.query(User).filter(User.email == payload.email.lower()).first()
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -171,7 +180,7 @@ def forgot_password(
     generic_message = {
         "message": "If this email is registered, a password reset link has been sent."
     }
-    user = db.query(User).filter(User.email == payload.email).first()
+    user = db.query(User).filter(User.email == payload.email.lower()).first()
     if not user:
         return generic_message
 
@@ -185,7 +194,10 @@ def forgot_password(
 
 
 @app.post("/auth/reset-password")
-def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def reset_password(
+    payload: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)
+):
     try:
         token_data = jwt.decode(payload.token, SECRET_KEY, algorithms=[ALGORITHM])
     except ExpiredSignatureError:
@@ -217,3 +229,42 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
     db.commit()
 
     return {"message": "Password reset successful"}
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="Stripe webhook secret not configured")
+
+    body = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    try:
+        event = stripe.Webhook.construct_event(body, sig_header, STRIPE_WEBHOOK_SECRET)
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid Stripe signature")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        customer_email = (session.get("customer_details") or {}).get("email", "")
+        customer_id = session.get("customer", "")
+        tier = (session.get("metadata") or {}).get("tier", "")
+
+        if not customer_email or not tier:
+            return {"status": "ignored", "reason": "missing email or tier metadata"}
+
+        tier = tier.lower()
+        if tier not in VALID_TIERS:
+            return {"status": "ignored", "reason": f"unrecognised tier: {tier}"}
+
+        user = db.query(User).filter(User.email == customer_email.lower()).first()
+        if user:
+            user.tier = tier
+            if customer_id:
+                user.stripe_customer_id = customer_id
+            db.add(user)
+            db.commit()
+
+    return {"status": "ok"}

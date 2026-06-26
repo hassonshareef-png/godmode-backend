@@ -35,6 +35,8 @@ class AuthEndpointsTests(unittest.TestCase):
 
     def setUp(self):
         self._clear_users()
+        # Reset in-memory rate limit counters so tests don't interfere with each other
+        self.main_module.limiter.reset()
         self.db = self.main_module.SessionLocal()
 
     def tearDown(self):
@@ -102,7 +104,7 @@ class AuthEndpointsTests(unittest.TestCase):
         reset_payload = self.main_module.ResetPasswordRequest(
             token=token, new_password="newcred123"
         )
-        reset = self.main_module.reset_password(reset_payload, db=self.db)
+        reset = self.main_module.reset_password(reset_payload, self._request(), db=self.db)
         self.assertEqual(reset["message"], "Password reset successful")
         self.assertIsNone(user_obj.reset_token)
 
@@ -130,9 +132,20 @@ class AuthEndpointsTests(unittest.TestCase):
             token=access_token, new_password="newcred123"
         )
         with self.assertRaises(HTTPException) as ctx:
-            self.main_module.reset_password(payload, db=self.db)
+            self.main_module.reset_password(payload, self._request(), db=self.db)
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("type", ctx.exception.detail)
+
+    def test_password_reset_token_rejected_as_access_token(self):
+        self._signup(email="guard@example.com", pw_text="cred56789")
+        forgot_payload = self.main_module.ForgotPasswordRequest(email="guard@example.com")
+        self.main_module.forgot_password(forgot_payload, self._request(), db=self.db)
+        user_obj = self.db.query(self.main_module.User).filter_by(email="guard@example.com").first()
+        reset_token = user_obj.reset_token
+
+        with self.assertRaises(HTTPException) as ctx:
+            self.main_module.get_current_user(token=reset_token, db=self.db)
+        self.assertEqual(ctx.exception.status_code, 401)
 
 
 if __name__ == "__main__":
