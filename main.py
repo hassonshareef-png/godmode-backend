@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List, Optional
 
 app = FastAPI(
     title="GODMODE++ Backend",
@@ -25,6 +26,15 @@ app.add_middleware(
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+class AnalyzeRequest(BaseModel):
+    draw_id: str
+    rundown_grid: List[List[str]]
+    pick3_day: Optional[str] = None
+    pick3_night: Optional[str] = None
+    pick4: Optional[str] = None
+    base_score: Optional[float] = 0.5
+    alpha: Optional[float] = None
 
 # ---------------------------
 # ROOT + HEALTH
