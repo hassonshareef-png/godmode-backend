@@ -41,6 +41,87 @@ class AnalyzeRequest(BaseModel):
     base_score: Optional[float] = 0.5
     alpha: Optional[float] = None
 
+class Director3175Request(BaseModel):
+    history: List[str]
+
+# -----------------------------------------
+# 3175 DIRECTOR MODE ENGINE
+# -----------------------------------------
+def run_3175_engine(draw_history):
+    """
+    Full 3175 Director Mode Engine
+    """
+    last_20 = draw_history[-20:]
+
+    seed = [3, 1, 7, 5]
+
+    mirror = {0:5,1:6,2:7,3:8,4:9,5:0,6:1,7:2,8:3,9:4}
+    mirror_seed = [mirror[n] for n in seed]
+
+    corner_pairs = [(3,1), (1,7), (7,5), (5,3)]
+
+    hits = []
+    for draw in last_20:
+        nums = [int(n) for n in draw]
+
+        if any(n in seed for n in nums):
+            hits.append(("seed", draw))
+
+        if any(n in mirror_seed for n in nums):
+            hits.append(("mirror", draw))
+
+        for a,b in corner_pairs:
+            if a in nums and b in nums:
+                hits.append(("corner", draw))
+
+    return {
+        "next_hot": seed,
+        "next_mirror": mirror_seed,
+        "corner_pairs": corner_pairs,
+        "recent_hits": hits
+    }
+
+# -----------------------------------------
+# DIRECTOR MODE ALERT LOGIC
+# -----------------------------------------
+def director_mode_3175_monitor(pred):
+    hits = pred["recent_hits"]
+
+    if hits:
+        return {
+            "alert": True,
+            "level": "RED",
+            "reason": hits
+        }
+
+    return {
+        "alert": False,
+        "level": "GREEN",
+        "reason": []
+    }
+
+# -----------------------------------------
+# AUTO UPDATE ENGINE
+# -----------------------------------------
+def auto_update_engine(draw_history):
+    pred_3175 = run_3175_engine(draw_history)
+    alert_3175 = director_mode_3175_monitor(pred_3175)
+
+    return {
+        "3175_prediction": pred_3175,
+        "3175_alert": alert_3175
+    }
+
+# -----------------------------------------
+# PREDICTION ENGINE HOOK
+# -----------------------------------------
+def prediction_engine(draw_history):
+    p3175 = run_3175_engine(draw_history)
+
+    return {
+        "3175": p3175
+    }
+
 # ---------------------------
 # ROOT + HEALTH
 # ---------------------------
@@ -96,7 +177,7 @@ def rundown(state: str):
     }
 
 # ---------------------------
-# 🔥 NEW: ANALYZE ENDPOINT
+# ANALYZE ENDPOINT (CORNER ENGINE)
 # ---------------------------
 @app.post("/analyze")
 def analyze(req: AnalyzeRequest):
@@ -120,3 +201,27 @@ def analyze(req: AnalyzeRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Corner analysis failed: {e}")
+
+
+# ---------------------------
+# DIRECTOR MODE — 3175 ENGINE
+# ---------------------------
+@app.post("/director/3175")
+def director_3175(req: Director3175Request):
+    """
+    Run the full 3175 Director Mode engine.
+    """
+    try:
+        history = req.history
+        pred = run_3175_engine(history)
+        alert = director_mode_3175_monitor(pred)
+
+        return {
+            "mode": "DIRECTOR",
+            "strategy": "3175",
+            "prediction": pred,
+            "alert": alert
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"3175 Director Mode failed: {e}")
