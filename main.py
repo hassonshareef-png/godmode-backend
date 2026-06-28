@@ -3,6 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 
+# -----------------------------------------
+# IMPORT YOUR CORNER ENGINE
+# -----------------------------------------
+from services.corner_signal import analyze_draw_with_grid
+
 app = FastAPI(
     title="GODMODE++ Backend",
     description="Prediction Engine API",
@@ -90,3 +95,28 @@ def rundown(state: str):
         ]
     }
 
+# ---------------------------
+# 🔥 NEW: ANALYZE ENDPOINT
+# ---------------------------
+@app.post("/analyze")
+def analyze(req: AnalyzeRequest):
+    """
+    Run the 3175 Corner-Pair Engine on a single draw.
+    """
+    try:
+        alpha = req.alpha if req.alpha is not None else 0.8
+
+        result = analyze_draw_with_grid(
+            draw_id=req.draw_id,
+            grid=req.rundown_grid,
+            pick3_day=req.pick3_day,
+            pick3_night=req.pick3_night,
+            pick4=req.pick4,
+            base_score=req.base_score,
+            alpha=alpha
+        )
+
+        return {"ok": True, "result": result}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Corner analysis failed: {e}")
