@@ -19,7 +19,7 @@ app = FastAPI(
 # ---------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # GitHub Pages frontend
+    allow_origins=["*"],  # GitHub Pages / Render frontend
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,9 +48,6 @@ class Director3175Request(BaseModel):
 # 3175 DIRECTOR MODE ENGINE
 # -----------------------------------------
 def run_3175_engine(draw_history):
-    """
-    Full 3175 Director Mode Engine
-    """
     last_20 = draw_history[-20:]
 
     seed = [3, 1, 7, 5]
@@ -138,7 +135,6 @@ def health():
 # ---------------------------
 @app.post("/login")
 def login(req: LoginRequest):
-    # TEMP: Replace with real DB later
     if req.email == "test@test.com" and req.password == "1234":
         return {"ok": True, "token": "godmode-token-001"}
 
@@ -149,7 +145,6 @@ def login(req: LoginRequest):
 # ---------------------------
 @app.get("/predict")
 def predict(state: str, game: str):
-    # TEMP: Replace with your real engine
     if game == "P3":
         nums = ["123", "317", "456", "908", "789"]
     else:
@@ -166,7 +161,6 @@ def predict(state: str, game: str):
 # ---------------------------
 @app.get("/rundown")
 def rundown(state: str):
-    # TEMP: Replace with real rundown logic
     return {
         "state": state,
         "rundown": [
@@ -181,9 +175,6 @@ def rundown(state: str):
 # ---------------------------
 @app.post("/analyze")
 def analyze(req: AnalyzeRequest):
-    """
-    Run the 3175 Corner-Pair Engine on a single draw.
-    """
     try:
         alpha = req.alpha if req.alpha is not None else 0.8
 
@@ -202,15 +193,11 @@ def analyze(req: AnalyzeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Corner analysis failed: {e}")
 
-
 # ---------------------------
 # DIRECTOR MODE — 3175 ENGINE
 # ---------------------------
 @app.post("/director/3175")
 def director_3175(req: Director3175Request):
-    """
-    Run the full 3175 Director Mode engine.
-    """
     try:
         history = req.history
         pred = run_3175_engine(history)
