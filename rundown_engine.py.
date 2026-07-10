@@ -1,34 +1,43 @@
 # rundown_engine.py
-# GODMODE++ Unified Rundown Engine (Pick 3 + Pick 4)
-# One complete file — ready for backend integration
+# GODMODE++ Unified Rundown Engine + FastAPI Backend
+# Pick 3 + Pick 4 + Multi-State + Universe Mode + Director Mode + API Auto-Download
+# ALL IN ONE FILE
 
 from typing import TypedDict, List, Dict, Callable
 from collections import defaultdict
+import requests
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+# ---------------------------------------------------------
+# FASTAPI SETUP
+# ---------------------------------------------------------
+
+app = FastAPI(title="GODMODE++ Lottery Engine")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ---------------------------------------------------------
 # DATA MODEL
 # ---------------------------------------------------------
 
 class Draw(TypedDict):
-    date: str      # "2026-07-10"
-    state: str     # "NJ"
-    game: str      # optional, can be ignored if you auto-detect
-    draw: str      # "9747" or "573"
+    date: str
+    state: str
+    draw: str
 
 DrawList = List[Draw]
 
 # ---------------------------------------------------------
-# GENERIC RUNDOWN MATH (WORKS FOR PICK 3 & PICK 4)
+# GENERIC RUNDOWN MATH
 # ---------------------------------------------------------
 
 def apply_rundown_pattern(base: str, pattern: str, lines: int = 10) -> List[str]:
-    """
-    Generic rundown math:
-    - Add each digit of pattern to base digit
-    - Wrap around using modulo 10
-    - Repeat to generate rundown stack
-    Works for both Pick 3 and Pick 4 (length is determined by base/pattern).
-    """
     results: List[str] = []
     current = base
 
@@ -101,11 +110,6 @@ def is_box(pred: str, actual: str) -> bool:
     return sorted(pred) == sorted(actual)
 
 def detect_game_type(draw: str) -> str:
-    """
-    Auto-detect game type by draw length.
-    3 digits -> PICK3
-    4 digits -> PICK4
-    """
     if len(draw) == 3:
         return "PICK3"
     elif len(draw) == 4:
@@ -124,11 +128,6 @@ def get_rundown_set(game_type: str) -> Dict[str, RundownFunc]:
 # ---------------------------------------------------------
 
 def evaluate_rundowns(draws: DrawList) -> List[Dict[str, str]]:
-    """
-    For each draw, run all rundowns for the detected game type
-    and compare their outputs to the NEXT real draw.
-    Returns a list of hit records.
-    """
     records: List[Dict[str, str]] = []
 
     for i in range(len(draws) - 1):
@@ -162,13 +161,10 @@ def evaluate_rundowns(draws: DrawList) -> List[Dict[str, str]]:
     return records
 
 # ---------------------------------------------------------
-# STRENGTH INDEX (GAME-SPECIFIC)
+# STRENGTH INDEX
 # ---------------------------------------------------------
 
 def build_strength_index(records: List[Dict[str, str]], game_type: str) -> Dict[str, Dict[str, int]]:
-    """
-    Aggregates straight/box/miss counts per rundown for a specific game type.
-    """
     index: Dict[str, Dict[str, int]] = defaultdict(lambda: {
         "straight": 0,
         "box": 0,
@@ -184,15 +180,10 @@ def build_strength_index(records: List[Dict[str, str]], game_type: str) -> Dict[
     return index
 
 # ---------------------------------------------------------
-# AUTO-SELECT RUNDOWN (UNIFIED)
+# AUTO-SELECT RUNDOWN
 # ---------------------------------------------------------
 
 def auto_select_rundown(draws: DrawList) -> Dict[str, str]:
-    """
-    Auto-select the rundown that hits straight for the most recent draw.
-    Uses the previous draw as base, latest draw as target.
-    Auto-detects Pick 3 vs Pick 4.
-    """
     if len(draws) < 2:
         return {"error": "Not enough draw data"}
 
@@ -226,14 +217,10 @@ def auto_select_rundown(draws: DrawList) -> Dict[str, str]:
     }
 
 # ---------------------------------------------------------
-# NEXT PREDICTION (UNIFIED)
+# NEXT PREDICTION
 # ---------------------------------------------------------
 
 def next_prediction(draws: DrawList) -> Dict[str, str]:
-    """
-    After auto-selecting the winning rundown,
-    generate the NEXT prediction (straight candidate) for the detected game.
-    """
     auto = auto_select_rundown(draws)
 
     if auto.get("rundown") == "none":
@@ -261,64 +248,154 @@ def next_prediction(draws: DrawList) -> Dict[str, str]:
     }
 
 # ---------------------------------------------------------
-# NJ SAMPLE DATASET (PICK4)
+# MULTI-STATE SUPPORT
+# ---------------------------------------------------------
+
+ALL_STATES: Dict[str, DrawList] = {}
+
+def load_state(state: str) -> DrawList:
+    return ALL_STATES.get(state, [])
+
+def run_state(state: str) -> Dict[str, Dict]:
+    draws = load_state(state)
+    if not draws:
+        return {"error": f"State '{state}' not found or has no data."}
+    return build_ui_json(draws)
+
+# ---------------------------------------------------------
+# SAMPLE DATASETS (NJ, NY, GA, FL, TX)
 # ---------------------------------------------------------
 
 NJ_2026: DrawList = [
-    {"date": "2026-03-26", "state": "NJ", "game": "PICK4", "draw": "2611"},
-    {"date": "2026-03-27", "state": "NJ", "game": "PICK4", "draw": "8034"},
-    {"date": "2026-03-28", "state": "NJ", "game": "PICK4", "draw": "8379"},
-    {"date": "2026-03-29", "state": "NJ", "game": "PICK4", "draw": "8159"},
-    {"date": "2026-03-30", "state": "NJ", "game": "PICK4", "draw": "9461"},
-    {"date": "2026-03-31", "state": "NJ", "game": "PICK4", "draw": "7072"},
-    {"date": "2026-04-01", "state": "NJ", "game": "PICK4", "draw": "3886"},
-    {"date": "2026-04-02", "state": "NJ", "game": "PICK4", "draw": "9071"},
-    {"date": "2026-04-03", "state": "NJ", "game": "PICK4", "draw": "7701"},
-    {"date": "2026-04-04", "state": "NJ", "game": "PICK4", "draw": "3959"},
-    {"date": "2026-04-05", "state": "NJ", "game": "PICK4", "draw": "6274"},
-    {"date": "2026-04-06", "state": "NJ", "game": "PICK4", "draw": "8585"},
-    {"date": "2026-04-07", "state": "NJ", "game": "PICK4", "draw": "5869"},
-    {"date": "2026-04-08", "state": "NJ", "game": "PICK4", "draw": "7804"},
-    {"date": "2026-04-09", "state": "NJ", "game": "PICK4", "draw": "7591"},
-    {"date": "2026-04-10", "state": "NJ", "game": "PICK4", "draw": "7235"},
-    {"date": "2026-04-11", "state": "NJ", "game": "PICK4", "draw": "5894"},
-    {"date": "2026-04-12", "state": "NJ", "game": "PICK4", "draw": "2916"},
-    {"date": "2026-04-13", "state": "NJ", "game": "PICK4", "draw": "2538"},
-    {"date": "2026-04-14", "state": "NJ", "game": "PICK4", "draw": "2803"},
-    {"date": "2026-04-15", "state": "NJ", "game": "PICK4", "draw": "3304"},
-    {"date": "2026-04-16", "state": "NJ", "game": "PICK4", "draw": "0063"},
-    {"date": "2026-04-17", "state": "NJ", "game": "PICK4", "draw": "8073"},
-    {"date": "2026-04-18", "state": "NJ", "game": "PICK4", "draw": "3634"},
-    {"date": "2026-04-19", "state": "NJ", "game": "PICK4", "draw": "1169"},
-    {"date": "2026-04-20", "state": "NJ", "game": "PICK4", "draw": "7318"},
-    {"date": "2026-04-21", "state": "NJ", "game": "PICK4", "draw": "5935"},
-    {"date": "2026-04-22", "state": "NJ", "game": "PICK4", "draw": "4876"},
-    {"date": "2026-04-23", "state": "NJ", "game": "PICK4", "draw": "0973"},
-    {"date": "2026-04-24", "state": "NJ", "game": "PICK4", "draw": "4017"},
-    {"date": "2026-04-25", "state": "NJ", "game": "PICK4", "draw": "5080"},
-    {"date": "2026-04-26", "state": "NJ", "game": "PICK4", "draw": "3665"},
-    {"date": "2026-04-27", "state": "NJ", "game": "PICK4", "draw": "4187"},
-    {"date": "2026-04-28", "state": "NJ", "game": "PICK4", "draw": "5876"},
-    {"date": "2026-04-29", "state": "NJ", "game": "PICK4", "draw": "8330"},
-    {"date": "2026-04-30", "state": "NJ", "game": "PICK4", "draw": "2205"},
-    {"date": "2026-05-01", "state": "NJ", "game": "PICK4", "draw": "6327"},
-    {"date": "2026-05-02", "state": "NJ", "game": "PICK4", "draw": "4439"},
-    {"date": "2026-05-03", "state": "NJ", "game": "PICK4", "draw": "3748"},
-    {"date": "2026-05-04", "state": "NJ", "game": "PICK4", "draw": "2608"},
-    {"date": "2026-05-05", "state": "NJ", "game": "PICK4", "draw": "8817"},
+    {"date": "2026-03-26", "state": "NJ", "draw": "2611"},
+    {"date": "2026-03-27", "state": "NJ", "draw": "8034"},
+    {"date": "2026-03-28", "state": "NJ", "draw": "8379"},
+    {"date": "2026-03-29", "state": "NJ", "draw": "8159"},
+    {"date": "2026-03-30", "state": "NJ", "draw": "9461"},
+    {"date": "2026-03-31", "state": "NJ", "draw": "7072"},
+    {"date": "2026-04-01", "state": "NJ", "draw": "3886"},
+    {"date": "2026-04-02", "state": "NJ", "draw": "9071"},
+    {"date": "2026-04-03", "state": "NJ", "draw": "7701"},
+    {"date": "2026-04-04", "state": "NJ", "draw": "3959"},
+    {"date": "2026-04-05", "state": "NJ", "draw": "6274"},
+    {"date": "2026-04-06", "state": "NJ", "draw": "8585"},
+    {"date": "2026-04-07", "state": "NJ", "draw": "5869"},
+    {"date": "2026-04-08", "state": "NJ", "draw": "7804"},
+    {"date": "2026-04-09", "state": "NJ", "draw": "7591"},
+    {"date": "2026-04-10", "state": "NJ", "draw": "7235"},
+    {"date": "2026-04-11", "state": "NJ", "draw": "5894"},
+    {"date": "2026-04-12", "state": "NJ", "draw": "2916"},
+    {"date": "2026-04-13", "state": "NJ", "draw": "2538"},
+    {"date": "2026-04-14", "state": "NJ", "draw": "2803"},
+    {"date": "2026-04-15", "state": "NJ", "draw": "3304"},
+    {"date": "2026-04-16", "state": "NJ", "draw": "0063"},
+    {"date": "2026-04-17", "state": "NJ", "draw": "8073"},
+    {"date": "2026-04-18", "state": "NJ", "draw": "3634"},
+    {"date": "2026-04-19", "state": "NJ", "draw": "1169"},
+    {"date": "2026-04-20", "state": "NJ", "draw": "7318"},
+    {"date": "2026-04-21", "state": "NJ", "draw": "5935"},
+    {"date": "2026-04-22", "state": "NJ", "draw": "4876"},
+    {"date": "2026-04-23", "state": "NJ", "draw": "0973"},
+    {"date": "2026-04-24", "state": "NJ", "draw": "4017"},
+    {"date": "2026-04-25", "state": "NJ", "draw": "5080"},
+    {"date": "2026-04-26", "state": "NJ", "draw": "3665"},
+    {"date": "2026-04-27", "state": "NJ", "draw": "4187"},
+    {"date": "2026-04-28", "state": "NJ", "draw": "5876"},
+    {"date": "2026-04-29", "state": "NJ", "draw": "8330"},
+    {"date": "2026-04-30", "state": "NJ", "draw": "2205"},
+    {"date": "2026-05-01", "state": "NJ", "draw": "6327"},
+    {"date": "2026-05-02", "state": "NJ", "draw": "4439"},
+    {"date": "2026-05-03", "state": "NJ", "draw": "3748"},
+    {"date": "2026-05-04", "state": "NJ", "draw": "2608"},
+    {"date": "2026-05-05", "state": "NJ", "draw": "8817"},
 ]
 
+NY_2026: DrawList = [
+    {"date": "2026-03-01", "state": "NY", "draw": "573"},
+    {"date": "2026-03-02", "state": "NY", "draw": "880"},
+    {"date": "2026-03-03", "state": "NY", "draw": "197"},
+    {"date": "2026-03-04", "state": "NY", "draw": "462"},
+]
+
+GA_2026: DrawList = [
+    {"date": "2026-03-01", "state": "GA", "draw": "317"},
+    {"date": "2026-03-02", "state": "GA", "draw": "880"},
+    {"date": "2026-03-03", "state": "GA", "draw": "197"},
+]
+
+FL_2026: DrawList = [
+    {"date": "2026-03-01", "state": "FL", "draw": "754"},
+    {"date": "2026-03-02", "state": "FL", "draw": "927"},
+    {"date": "2026-03-03", "state": "FL", "draw": "952"},
+]
+
+TX_2026: DrawList = [
+    {"date": "2026-03-01", "state": "TX", "draw": "972"},
+    {"date": "2026-03-02", "state": "TX", "draw": "063"},
+    {"date": "2026-03-03", "state": "TX", "draw": "317"},
+]
+
+ALL_STATES["NJ"] = NJ_2026
+ALL_STATES["NY"] = NY_2026
+ALL_STATES["GA"] = GA_2026
+ALL_STATES["FL"] = FL_2026
+ALL_STATES["TX"] = TX_2026
+
 # ---------------------------------------------------------
-# MAIN / UI JSON OUTPUT
+# API AUTO-DOWNLOAD HOOK
+# ---------------------------------------------------------
+
+def fetch_draws_from_api(state: str, url: str) -> DrawList:
+    try:
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        draws: DrawList = []
+        for item in data:
+            draws.append({
+                "date": item["date"],
+                "state": item.get("state", state),
+                "draw": item["draw"],
+            })
+        return draws
+    except Exception:
+        return []
+
+# ---------------------------------------------------------
+# UNIVERSE MODE (GLOBAL FUSION)
+# ---------------------------------------------------------
+
+def universe_strength() -> Dict[str, Dict[str, Dict[str, int]]]:
+    all_records: List[Dict[str, str]] = []
+    for state, draws in ALL_STATES.items():
+        recs = evaluate_rundowns(draws)
+        all_records.extend(recs)
+
+    return {
+        "PICK3": build_strength_index(all_records, "PICK3"),
+        "PICK4": build_strength_index(all_records, "PICK4"),
+    }
+
+# ---------------------------------------------------------
+# DIRECTOR MODE (STATE-TO-STATE PATTERN TRACKING)
+# ---------------------------------------------------------
+
+def director_mode() -> Dict[str, Dict[str, Dict[str, int]]]:
+    result: Dict[str, Dict[str, Dict[str, int]]] = {}
+
+    for state, draws in ALL_STATES.items():
+        recs = evaluate_rundowns(draws)
+        result[state] = {
+            "PICK3": build_strength_index(recs, "PICK3"),
+            "PICK4": build_strength_index(recs, "PICK4"),
+        }
+
+    return result
+
+# ---------------------------------------------------------
+# UI JSON OUTPUT
 # ---------------------------------------------------------
 
 def build_ui_json(draws: DrawList) -> Dict[str, Dict]:
-    """
-    Unified UI JSON:
-    - autoSelect: winning rundown for latest draw
-    - nextPrediction: next straight candidate
-    - strengthIndex: game-specific strength index
-    """
     auto = auto_select_rundown(draws)
     next_pred = next_prediction(draws)
     records = evaluate_rundowns(draws)
@@ -331,7 +408,30 @@ def build_ui_json(draws: DrawList) -> Dict[str, Dict]:
         "strengthIndex": strength,
     }
 
+# ---------------------------------------------------------
+# FASTAPI ENDPOINTS
+# ---------------------------------------------------------
+
+@app.get("/state/{state}")
+def api_state(state: str):
+    return run_state(state.upper())
+
+@app.get("/universe")
+def api_universe():
+    return universe_strength()
+
+@app.get("/director")
+def api_director():
+    return director_mode()
+
+# ---------------------------------------------------------
+# MAIN TEST
+# ---------------------------------------------------------
+
 if __name__ == "__main__":
     print("Running NJ unified engine test...")
-    ui_json = build_ui_json(NJ_2026)
-    print(ui_json)
+    print(build_ui_json(NJ_2026))
+    print("\nUniverse Mode:")
+    print(universe_strength())
+    print("\nDirector Mode:")
+    print(direct
