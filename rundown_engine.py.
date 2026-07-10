@@ -1,5 +1,5 @@
-# godmode_rundown_engine.py
-# GODMODE++ Auto-Learning Rundown Engine
+# rundown_engine.py
+# GODMODE++ Unified Rundown Engine (Pick 3 + Pick 4)
 # One complete file — ready for backend integration
 
 from typing import TypedDict, List, Dict, Callable
@@ -12,62 +12,122 @@ from collections import defaultdict
 class Draw(TypedDict):
     date: str      # "2026-07-10"
     state: str     # "NJ"
-    game: str      # "PICK4"
-    draw: str      # "9747"
+    game: str      # optional, can be ignored if you auto-detect
+    draw: str      # "9747" or "573"
 
 DrawList = List[Draw]
 
 # ---------------------------------------------------------
-# RUNDOWN FUNCTIONS (PLACEHOLDERS)
+# GENERIC RUNDOWN MATH (WORKS FOR PICK 3 & PICK 4)
 # ---------------------------------------------------------
+
+def apply_rundown_pattern(base: str, pattern: str, lines: int = 10) -> List[str]:
+    """
+    Generic rundown math:
+    - Add each digit of pattern to base digit
+    - Wrap around using modulo 10
+    - Repeat to generate rundown stack
+    Works for both Pick 3 and Pick 4 (length is determined by base/pattern).
+    """
+    results: List[str] = []
+    current = base
+
+    for _ in range(lines):
+        new_digits = []
+        for b, p in zip(current, pattern):
+            nb = (int(b) + int(p)) % 10
+            new_digits.append(str(nb))
+        current = "".join(new_digits)
+        results.append(current)
+
+    return results
+
+def make_rundown(pattern: str):
+    def _rd(n: str) -> List[str]:
+        return apply_rundown_pattern(n, pattern, lines=10)
+    return _rd
 
 RundownFunc = Callable[[str], List[str]]
 
-def rd_1111(n: str) -> List[str]: return []
-def rd_1212(n: str) -> List[str]: return []
-def rd_1231(n: str) -> List[str]: return []
-def rd_1919(n: str) -> List[str]: return []
-def rd_2452(n: str) -> List[str]: return []
-def rd_3175(n: str) -> List[str]: return []
-def rd_3453(n: str) -> List[str]: return []
-def rd_3693(n: str) -> List[str]: return []
-def rd_4228(n: str) -> List[str]: return []
-def rd_4242(n: str) -> List[str]: return []
-def rd_6464(n: str) -> List[str]: return []
-def rd_6767(n: str) -> List[str]: return []
-def rd_7907(n: str) -> List[str]: return []
-def rd_8908(n: str) -> List[str]: return []
-def rd_9797(n: str) -> List[str]: return []
+# ---------------------------------------------------------
+# PICK 4 RUNDOWNS
+# ---------------------------------------------------------
 
-RUNDOWNS: Dict[str, RundownFunc] = {
-    "1111": rd_1111,
-    "1212": rd_1212,
-    "1231": rd_1231,
-    "1919": rd_1919,
-    "2452": rd_2452,
-    "3175": rd_3175,
-    "3453": rd_3453,
-    "3693": rd_3693,
-    "4228": rd_4228,
-    "4242": rd_4242,
-    "6464": rd_6464,
-    "6767": rd_6767,
-    "7907": rd_7907,
-    "8908": rd_8908,
-    "9797": rd_9797,
+PICK4_RUNDOWNS: Dict[str, RundownFunc] = {
+    "1111": make_rundown("1111"),
+    "1212": make_rundown("1212"),
+    "1231": make_rundown("1231"),
+    "1919": make_rundown("1919"),
+    "2452": make_rundown("2452"),
+    "3175": make_rundown("3175"),
+    "3453": make_rundown("3453"),
+    "3693": make_rundown("3693"),
+    "4228": make_rundown("4228"),
+    "4242": make_rundown("4242"),
+    "6464": make_rundown("6464"),
+    "6767": make_rundown("6767"),
+    "7907": make_rundown("7907"),
+    "8908": make_rundown("8908"),
+    "9797": make_rundown("9797"),
 }
 
 # ---------------------------------------------------------
-# HIT EVALUATION (STRAIGHT / BOX / MISS)
+# PICK 3 RUNDOWNS
+# ---------------------------------------------------------
+
+PICK3_RUNDOWNS: Dict[str, RundownFunc] = {
+    "063": make_rundown("063"),
+    "111": make_rundown("111"),
+    "123": make_rundown("123"),
+    "245": make_rundown("245"),
+    "285": make_rundown("285"),
+    "291": make_rundown("291"),
+    "317": make_rundown("317"),
+    "369": make_rundown("369"),
+    "401": make_rundown("401"),
+    "730": make_rundown("730"),
+    "754": make_rundown("754"),
+    "927": make_rundown("927"),
+    "952": make_rundown("952"),
+    "962": make_rundown("962"),
+    "972": make_rundown("972"),
+}
+
+# ---------------------------------------------------------
+# HELPERS
 # ---------------------------------------------------------
 
 def is_box(pred: str, actual: str) -> bool:
     return sorted(pred) == sorted(actual)
 
+def detect_game_type(draw: str) -> str:
+    """
+    Auto-detect game type by draw length.
+    3 digits -> PICK3
+    4 digits -> PICK4
+    """
+    if len(draw) == 3:
+        return "PICK3"
+    elif len(draw) == 4:
+        return "PICK4"
+    return "UNKNOWN"
+
+def get_rundown_set(game_type: str) -> Dict[str, RundownFunc]:
+    if game_type == "PICK3":
+        return PICK3_RUNDOWNS
+    elif game_type == "PICK4":
+        return PICK4_RUNDOWNS
+    return {}
+
+# ---------------------------------------------------------
+# UNIFIED HIT EVALUATION
+# ---------------------------------------------------------
+
 def evaluate_rundowns(draws: DrawList) -> List[Dict[str, str]]:
     """
-    For each draw, run all rundowns and compare their outputs
-    to the NEXT real draw. Returns a list of hit records.
+    For each draw, run all rundowns for the detected game type
+    and compare their outputs to the NEXT real draw.
+    Returns a list of hit records.
     """
     records: List[Dict[str, str]] = []
 
@@ -75,7 +135,10 @@ def evaluate_rundowns(draws: DrawList) -> List[Dict[str, str]]:
         current = draws[i]
         next_draw = draws[i + 1]["draw"]
 
-        for name, func in RUNDOWNS.items():
+        game_type = detect_game_type(current["draw"])
+        rundowns = get_rundown_set(game_type)
+
+        for name, func in rundowns.items():
             preds = func(current["draw"])
             hit_type = "miss"
 
@@ -88,7 +151,7 @@ def evaluate_rundowns(draws: DrawList) -> List[Dict[str, str]]:
 
             records.append({
                 "state": current["state"],
-                "game": current["game"],
+                "game": game_type,
                 "date": current["date"],
                 "rundown": name,
                 "current_draw": current["draw"],
@@ -99,12 +162,12 @@ def evaluate_rundowns(draws: DrawList) -> List[Dict[str, str]]:
     return records
 
 # ---------------------------------------------------------
-# RUNDOWN STRENGTH INDEX
+# STRENGTH INDEX (GAME-SPECIFIC)
 # ---------------------------------------------------------
 
-def build_strength_index(records: List[Dict[str, str]]) -> Dict[str, Dict[str, int]]:
+def build_strength_index(records: List[Dict[str, str]], game_type: str) -> Dict[str, Dict[str, int]]:
     """
-    Aggregates straight/box/miss counts per rundown.
+    Aggregates straight/box/miss counts per rundown for a specific game type.
     """
     index: Dict[str, Dict[str, int]] = defaultdict(lambda: {
         "straight": 0,
@@ -113,42 +176,162 @@ def build_strength_index(records: List[Dict[str, str]]) -> Dict[str, Dict[str, i
     })
 
     for rec in records:
+        if rec["game"] != game_type:
+            continue
         r = rec["rundown"]
         index[r][rec["hit_type"]] += 1
 
     return index
 
-def print_strength_index(index: Dict[str, Dict[str, int]]) -> None:
-    """
-    Simple console output — replace with JSON/API response if needed.
-    """
-    for r, stats in index.items():
-        print(
-            f"{r}: STRAIGHT={stats['straight']} | "
-            f"BOX={stats['box']} | MISS={stats['miss']}"
-        )
-
 # ---------------------------------------------------------
-# EXAMPLE: NJ TEST DATA (YOU WILL REPLACE THIS)
+# AUTO-SELECT RUNDOWN (UNIFIED)
 # ---------------------------------------------------------
 
-NJ_EXAMPLE: DrawList = [
-    # Paste your NJ calendar results here
-    # {"date": "2026-07-09", "state": "NJ", "game": "PICK4", "draw": "4298"},
-    # {"date": "2026-07-10", "state": "NJ", "game": "PICK4", "draw": "9747"},
+def auto_select_rundown(draws: DrawList) -> Dict[str, str]:
+    """
+    Auto-select the rundown that hits straight for the most recent draw.
+    Uses the previous draw as base, latest draw as target.
+    Auto-detects Pick 3 vs Pick 4.
+    """
+    if len(draws) < 2:
+        return {"error": "Not enough draw data"}
+
+    last = draws[-2]
+    current = draws[-1]
+
+    target = current["draw"]
+    base = last["draw"]
+
+    game_type = detect_game_type(base)
+    rundowns = get_rundown_set(game_type)
+
+    for name, func in rundowns.items():
+        preds = func(base)
+        for p in preds:
+            if p == target:
+                return {
+                    "rundown": name,
+                    "hit": p,
+                    "date": current["date"],
+                    "state": current["state"],
+                    "game": game_type,
+                }
+
+    return {
+        "rundown": "none",
+        "hit": "none",
+        "date": current["date"],
+        "state": current["state"],
+        "game": game_type,
+    }
+
+# ---------------------------------------------------------
+# NEXT PREDICTION (UNIFIED)
+# ---------------------------------------------------------
+
+def next_prediction(draws: DrawList) -> Dict[str, str]:
+    """
+    After auto-selecting the winning rundown,
+    generate the NEXT prediction (straight candidate) for the detected game.
+    """
+    auto = auto_select_rundown(draws)
+
+    if auto.get("rundown") == "none":
+        return {
+            "prediction": "none",
+            "rundown": "none",
+            "type": "none"
+        }
+
+    rd = auto["rundown"]
+    latest = draws[-1]["draw"]
+    game_type = detect_game_type(latest)
+    rundowns = get_rundown_set(game_type)
+
+    preds = rundowns[rd](latest)
+    next_straight = preds[0]
+
+    return {
+        "prediction": next_straight,
+        "rundown": rd,
+        "type": "straight_candidate",
+        "game": game_type,
+        "state": draws[-1]["state"],
+        "date": draws[-1]["date"],
+    }
+
+# ---------------------------------------------------------
+# NJ SAMPLE DATASET (PICK4)
+# ---------------------------------------------------------
+
+NJ_2026: DrawList = [
+    {"date": "2026-03-26", "state": "NJ", "game": "PICK4", "draw": "2611"},
+    {"date": "2026-03-27", "state": "NJ", "game": "PICK4", "draw": "8034"},
+    {"date": "2026-03-28", "state": "NJ", "game": "PICK4", "draw": "8379"},
+    {"date": "2026-03-29", "state": "NJ", "game": "PICK4", "draw": "8159"},
+    {"date": "2026-03-30", "state": "NJ", "game": "PICK4", "draw": "9461"},
+    {"date": "2026-03-31", "state": "NJ", "game": "PICK4", "draw": "7072"},
+    {"date": "2026-04-01", "state": "NJ", "game": "PICK4", "draw": "3886"},
+    {"date": "2026-04-02", "state": "NJ", "game": "PICK4", "draw": "9071"},
+    {"date": "2026-04-03", "state": "NJ", "game": "PICK4", "draw": "7701"},
+    {"date": "2026-04-04", "state": "NJ", "game": "PICK4", "draw": "3959"},
+    {"date": "2026-04-05", "state": "NJ", "game": "PICK4", "draw": "6274"},
+    {"date": "2026-04-06", "state": "NJ", "game": "PICK4", "draw": "8585"},
+    {"date": "2026-04-07", "state": "NJ", "game": "PICK4", "draw": "5869"},
+    {"date": "2026-04-08", "state": "NJ", "game": "PICK4", "draw": "7804"},
+    {"date": "2026-04-09", "state": "NJ", "game": "PICK4", "draw": "7591"},
+    {"date": "2026-04-10", "state": "NJ", "game": "PICK4", "draw": "7235"},
+    {"date": "2026-04-11", "state": "NJ", "game": "PICK4", "draw": "5894"},
+    {"date": "2026-04-12", "state": "NJ", "game": "PICK4", "draw": "2916"},
+    {"date": "2026-04-13", "state": "NJ", "game": "PICK4", "draw": "2538"},
+    {"date": "2026-04-14", "state": "NJ", "game": "PICK4", "draw": "2803"},
+    {"date": "2026-04-15", "state": "NJ", "game": "PICK4", "draw": "3304"},
+    {"date": "2026-04-16", "state": "NJ", "game": "PICK4", "draw": "0063"},
+    {"date": "2026-04-17", "state": "NJ", "game": "PICK4", "draw": "8073"},
+    {"date": "2026-04-18", "state": "NJ", "game": "PICK4", "draw": "3634"},
+    {"date": "2026-04-19", "state": "NJ", "game": "PICK4", "draw": "1169"},
+    {"date": "2026-04-20", "state": "NJ", "game": "PICK4", "draw": "7318"},
+    {"date": "2026-04-21", "state": "NJ", "game": "PICK4", "draw": "5935"},
+    {"date": "2026-04-22", "state": "NJ", "game": "PICK4", "draw": "4876"},
+    {"date": "2026-04-23", "state": "NJ", "game": "PICK4", "draw": "0973"},
+    {"date": "2026-04-24", "state": "NJ", "game": "PICK4", "draw": "4017"},
+    {"date": "2026-04-25", "state": "NJ", "game": "PICK4", "draw": "5080"},
+    {"date": "2026-04-26", "state": "NJ", "game": "PICK4", "draw": "3665"},
+    {"date": "2026-04-27", "state": "NJ", "game": "PICK4", "draw": "4187"},
+    {"date": "2026-04-28", "state": "NJ", "game": "PICK4", "draw": "5876"},
+    {"date": "2026-04-29", "state": "NJ", "game": "PICK4", "draw": "8330"},
+    {"date": "2026-04-30", "state": "NJ", "game": "PICK4", "draw": "2205"},
+    {"date": "2026-05-01", "state": "NJ", "game": "PICK4", "draw": "6327"},
+    {"date": "2026-05-02", "state": "NJ", "game": "PICK4", "draw": "4439"},
+    {"date": "2026-05-03", "state": "NJ", "game": "PICK4", "draw": "3748"},
+    {"date": "2026-05-04", "state": "NJ", "game": "PICK4", "draw": "2608"},
+    {"date": "2026-05-05", "state": "NJ", "game": "PICK4", "draw": "8817"},
 ]
 
 # ---------------------------------------------------------
-# MAIN ENTRY POINT
+# MAIN / UI JSON OUTPUT
 # ---------------------------------------------------------
 
-def run_analysis(draws: DrawList) -> None:
+def build_ui_json(draws: DrawList) -> Dict[str, Dict]:
+    """
+    Unified UI JSON:
+    - autoSelect: winning rundown for latest draw
+    - nextPrediction: next straight candidate
+    - strengthIndex: game-specific strength index
+    """
+    auto = auto_select_rundown(draws)
+    next_pred = next_prediction(draws)
     records = evaluate_rundowns(draws)
-    index = build_strength_index(records)
-    print_strength_index(index)
+    game_type = auto.get("game", detect_game_type(draws[-1]["draw"]))
+    strength = build_strength_index(records, game_type)
+
+    return {
+        "autoSelect": auto,
+        "nextPrediction": next_pred,
+        "strengthIndex": strength,
+    }
 
 if __name__ == "__main__":
-    run_analysis(NJ_EXAMPLE)
-
-if __name__ == "__main__":
-    run_nj_example()
+    print("Running NJ unified engine test...")
+    ui_json = build_ui_json(NJ_2026)
+    print(ui_json)
