@@ -1,0 +1,154 @@
+# godmode_rundown_engine.py
+# GODMODE++ Auto-Learning Rundown Engine
+# One complete file — ready for backend integration
+
+from typing import TypedDict, List, Dict, Callable
+from collections import defaultdict
+
+# ---------------------------------------------------------
+# DATA MODEL
+# ---------------------------------------------------------
+
+class Draw(TypedDict):
+    date: str      # "2026-07-10"
+    state: str     # "NJ"
+    game: str      # "PICK4"
+    draw: str      # "9747"
+
+DrawList = List[Draw]
+
+# ---------------------------------------------------------
+# RUNDOWN FUNCTIONS (PLACEHOLDERS)
+# ---------------------------------------------------------
+
+RundownFunc = Callable[[str], List[str]]
+
+def rd_1111(n: str) -> List[str]: return []
+def rd_1212(n: str) -> List[str]: return []
+def rd_1231(n: str) -> List[str]: return []
+def rd_1919(n: str) -> List[str]: return []
+def rd_2452(n: str) -> List[str]: return []
+def rd_3175(n: str) -> List[str]: return []
+def rd_3453(n: str) -> List[str]: return []
+def rd_3693(n: str) -> List[str]: return []
+def rd_4228(n: str) -> List[str]: return []
+def rd_4242(n: str) -> List[str]: return []
+def rd_6464(n: str) -> List[str]: return []
+def rd_6767(n: str) -> List[str]: return []
+def rd_7907(n: str) -> List[str]: return []
+def rd_8908(n: str) -> List[str]: return []
+def rd_9797(n: str) -> List[str]: return []
+
+RUNDOWNS: Dict[str, RundownFunc] = {
+    "1111": rd_1111,
+    "1212": rd_1212,
+    "1231": rd_1231,
+    "1919": rd_1919,
+    "2452": rd_2452,
+    "3175": rd_3175,
+    "3453": rd_3453,
+    "3693": rd_3693,
+    "4228": rd_4228,
+    "4242": rd_4242,
+    "6464": rd_6464,
+    "6767": rd_6767,
+    "7907": rd_7907,
+    "8908": rd_8908,
+    "9797": rd_9797,
+}
+
+# ---------------------------------------------------------
+# HIT EVALUATION (STRAIGHT / BOX / MISS)
+# ---------------------------------------------------------
+
+def is_box(pred: str, actual: str) -> bool:
+    return sorted(pred) == sorted(actual)
+
+def evaluate_rundowns(draws: DrawList) -> List[Dict[str, str]]:
+    """
+    For each draw, run all rundowns and compare their outputs
+    to the NEXT real draw. Returns a list of hit records.
+    """
+    records: List[Dict[str, str]] = []
+
+    for i in range(len(draws) - 1):
+        current = draws[i]
+        next_draw = draws[i + 1]["draw"]
+
+        for name, func in RUNDOWNS.items():
+            preds = func(current["draw"])
+            hit_type = "miss"
+
+            for p in preds:
+                if p == next_draw:
+                    hit_type = "straight"
+                    break
+                elif is_box(p, next_draw) and hit_type != "straight":
+                    hit_type = "box"
+
+            records.append({
+                "state": current["state"],
+                "game": current["game"],
+                "date": current["date"],
+                "rundown": name,
+                "current_draw": current["draw"],
+                "next_draw": next_draw,
+                "hit_type": hit_type,
+            })
+
+    return records
+
+# ---------------------------------------------------------
+# RUNDOWN STRENGTH INDEX
+# ---------------------------------------------------------
+
+def build_strength_index(records: List[Dict[str, str]]) -> Dict[str, Dict[str, int]]:
+    """
+    Aggregates straight/box/miss counts per rundown.
+    """
+    index: Dict[str, Dict[str, int]] = defaultdict(lambda: {
+        "straight": 0,
+        "box": 0,
+        "miss": 0,
+    })
+
+    for rec in records:
+        r = rec["rundown"]
+        index[r][rec["hit_type"]] += 1
+
+    return index
+
+def print_strength_index(index: Dict[str, Dict[str, int]]) -> None:
+    """
+    Simple console output — replace with JSON/API response if needed.
+    """
+    for r, stats in index.items():
+        print(
+            f"{r}: STRAIGHT={stats['straight']} | "
+            f"BOX={stats['box']} | MISS={stats['miss']}"
+        )
+
+# ---------------------------------------------------------
+# EXAMPLE: NJ TEST DATA (YOU WILL REPLACE THIS)
+# ---------------------------------------------------------
+
+NJ_EXAMPLE: DrawList = [
+    # Paste your NJ calendar results here
+    # {"date": "2026-07-09", "state": "NJ", "game": "PICK4", "draw": "4298"},
+    # {"date": "2026-07-10", "state": "NJ", "game": "PICK4", "draw": "9747"},
+]
+
+# ---------------------------------------------------------
+# MAIN ENTRY POINT
+# ---------------------------------------------------------
+
+def run_analysis(draws: DrawList) -> None:
+    records = evaluate_rundowns(draws)
+    index = build_strength_index(records)
+    print_strength_index(index)
+
+if __name__ == "__main__":
+    run_analysis(NJ_EXAMPLE)
+
+if __name__ == "__main__":
+    run_nj_example()
