@@ -43,7 +43,7 @@ def get_db():
 class SignupRequest(BaseModel):
     email: str
     password: str
-    tier: str = "god"
+    tier: str = "free"
 
 
 class LoginRequest(BaseModel):
