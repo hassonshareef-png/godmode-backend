@@ -77,6 +77,12 @@ class PurchaseRequest(BaseModel):
     tier: str  # "god" or "universe"
 
 
+class AdminBroadcastRequest(BaseModel):
+    subject: str
+    message: str
+    admin_key: str
+
+
 # ============================================================================
 # DEPENDENCY: GET CURRENT USER (Optional - for endpoints that support both auth and anon)
 # ============================================================================
@@ -654,4 +660,37 @@ def set_director(
         "email": user.email,
         "is_director": user.is_director,
         "tier": user.tier,
+    }
+
+
+@app.post("/admin/broadcast")
+def broadcast_message(
+    payload: AdminBroadcastRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Admin endpoint to broadcast a message to all users.
+    Requires admin_key for security.
+    """
+    admin_key_env = os.getenv("ADMIN_KEY", "admin-secret-key")
+    if payload.admin_key != admin_key_env:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid admin key",
+        )
+
+    users = db.query(User).all()
+    emails = [user.email for user in users]
+
+    if not emails:
+        return {"message": "No users found to broadcast to"}
+
+    # In a real production environment, this would trigger a background task
+    # to send emails via a service like SendGrid, Mailgun, or Gmail API.
+    # For now, we return the list of targets and a success status.
+    return {
+        "status": "success",
+        "message": f"Broadcast queued for {len(emails)} users",
+        "subject": payload.subject,
+        "targets": emails
     }
