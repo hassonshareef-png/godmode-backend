@@ -155,6 +155,10 @@ def get_current_user(
 # HEALTH & STATUS ENDPOINTS
 # ============================================================================
 
+@app.get("/")
+def read_root():
+    return {"message": "GODMODE++ Backend is running", "docs": "/docs"}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
