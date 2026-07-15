@@ -26,6 +26,15 @@ from .models import User
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="GODMODE Backend", version="2.0.0")
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://godmode-frontend-l.onrender.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 DEFAULT_CORS_ORIGINS = (
     "https://godmode-frontend-l.onrender.com,"
