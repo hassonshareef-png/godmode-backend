@@ -40,11 +40,7 @@ DEFAULT_CORS_ORIGINS = (
     "https://godmode-frontend-l.onrender.com,"
     "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5500"
 )
-CORS_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
-    if origin.strip()
-]
+CORS_ORIGINS = [...]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
