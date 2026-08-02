@@ -47,6 +47,52 @@ app.add_middleware(
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
 DIRECTOR_PIN = os.getenv("DIRECTOR_PIN", "")
 
+# Owner director auto-provisioning (env-driven)
+OWNER_USERNAME = os.getenv("OWNER_USERNAME", "").strip().lower()
+OWNER_PASSWORD = os.getenv("OWNER_PASSWORD", "")
+OWNER_EMAIL = os.getenv("OWNER_EMAIL", "").strip().lower()
+
+
+def _get_owner_email() -> str:
+    if OWNER_EMAIL:
+        return OWNER_EMAIL
+    if OWNER_USERNAME:
+        return f"{OWNER_USERNAME}@owner.local"
+    return ""
+
+
+def _ensure_owner_account() -> None:
+    """Auto-provision the owner account as director tier at startup."""
+    if not OWNER_USERNAME or not OWNER_PASSWORD:
+        return
+    owner_email = _get_owner_email()
+    if not owner_email:
+        return
+    db = SessionLocal()
+    try:
+        owner = db.query(User).filter(User.email == owner_email).first()
+        owner_password_hash = hash_password(OWNER_PASSWORD)
+        if owner:
+            owner.hashed_password = owner_password_hash
+            owner.tier = "director"
+            owner.is_director = True
+        else:
+            owner = User(
+                email=owner_email,
+                hashed_password=owner_password_hash,
+                tier="director",
+                has_god_mode=True,
+                has_universe_mode=True,
+                is_director=True,
+            )
+            db.add(owner)
+        db.commit()
+    finally:
+        db.close()
+
+
+_ensure_owner_account()
+
 
 def get_db():
     db = SessionLocal()
@@ -63,7 +109,7 @@ class SignupRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str = Field(min_length=1, max_length=254)
     password: str = Field(min_length=8, max_length=128)
 
 
@@ -235,8 +281,15 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)):
 
 @app.post("/auth/login")
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    email = _normalize_email(str(payload.email))
-    user = db.query(User).filter(User.email == email).first()
+    identifier = _normalize_email(payload.email)
+    owner_email = _get_owner_email()
+
+    # Owner login: match by username, route to owner account
+    if OWNER_USERNAME and owner_email and identifier == OWNER_USERNAME:
+        user = db.query(User).filter(User.email == owner_email).first()
+    else:
+        user = db.query(User).filter(User.email == identifier).first()
+
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return _token_pair(user)
