@@ -12,3 +12,4 @@ class User(Base):
     has_universe_mode = Column(Boolean, default=False)  # Purchased Universe Mode
     is_director = Column(Boolean, default=False)  # Owner with Director access
     reset_token = Column(String, nullable=True)
+    stripe_customer_id = Column(String, nullable=True, index=True)
