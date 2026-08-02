@@ -434,4 +434,4 @@ if __name__ == "__main__":
     print("\nUniverse Mode:")
     print(universe_strength())
     print("\nDirector Mode:")
-    print(direct
+    print(director_mode())
