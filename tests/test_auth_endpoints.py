@@ -24,7 +24,7 @@ class AuthEndpointsTests(unittest.TestCase):
                 "STRIPE_PAYMENT_LINK_GOD": "https://buy.stripe.com/test_god",
                 "STRIPE_PAYMENT_LINK_UNIVERSE": "https://buy.stripe.com/test_universe",
                 "STRIPE_WEBHOOK_SECRET": "whsec_test",
-                "CORS_ORIGINS": "https://godmode-frontend-l.onrender.com,http://localhost:5173",
+                "CORS_ORIGINS": "https://godmode-frontend-l.onrender.com,https://hassonshareef-png.github.io,http://localhost:5173",
             }
         )
         import app.auth
