@@ -275,6 +275,10 @@ class AuthEndpointsTests(unittest.TestCase):
             body = response.json()
             self.assertTrue(body["is_director"])
             self.assertEqual(body["tier"], "director")
+            # Verify username is persisted from the env var so /auth/me is correct
+            me = self.client.get("/auth/me", headers=self.bearer(body["access_token"]))
+            self.assertEqual(me.status_code, 200)
+            self.assertEqual(me.json()["username"], "siteowner")
         finally:
             for key, val in original.items():
                 if val is None:
