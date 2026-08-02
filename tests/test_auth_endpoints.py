@@ -205,6 +205,25 @@ class AuthEndpointsTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
 
+    def test_admin_broadcast_acknowledges_delivery_not_implemented(self):
+        self.signup()
+        response = self.client.post(
+            "/admin/broadcast",
+            json={
+                "subject": "maintenance",
+                "message": "Heads up",
+                "admin_key": "admin-secret-key",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "accepted")
+        self.assertIn("email delivery not yet implemented", body["message"])
+        self.assertEqual(
+            body["note"],
+            "No emails were sent. Integrate an email provider to enable delivery.",
+        )
+
     def test_checkout_uses_signed_non_sensitive_reference(self):
         tokens = self.signup().json()
         response = self.client.post(

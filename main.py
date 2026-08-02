@@ -1,3 +1,5 @@
+# LEGACY PROTOTYPE — Not used in production. The production app is app/main.py.
+# This file is kept for reference only.
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -6,7 +8,10 @@ from typing import List, Optional
 # -----------------------------------------
 # IMPORT YOUR CORNER ENGINE
 # -----------------------------------------
-from services.corner_signal import analyze_draw_with_grid
+try:
+    from services.corner_signal import analyze_draw_with_grid
+except ImportError:
+    analyze_draw_with_grid = None  # type: ignore
 
 app = FastAPI(
     title="GODMODE++ Backend",

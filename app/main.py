@@ -26,21 +26,16 @@ from .models import User
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="GODMODE Backend", version="2.0.0")
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://godmode-frontend-l.onrender.com"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 DEFAULT_CORS_ORIGINS = (
     "https://godmode-frontend-l.onrender.com,"
     "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5500"
 )
-CORS_ORIGINS = [...]
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -573,7 +568,8 @@ def broadcast_message(payload: AdminBroadcastRequest, db: Session = Depends(get_
     user_count = db.query(User).count()
     return {
         "status": "accepted",
-        "message": f"Broadcast accepted for {user_count} users",
+        "message": f"Broadcast logged for {user_count} users (email delivery not yet implemented)",
         "subject": payload.subject,
         "target_count": user_count,
+        "note": "No emails were sent. Integrate an email provider to enable delivery.",
     }

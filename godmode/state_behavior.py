@@ -51,7 +51,11 @@ def get_state_profile(code: str) -> StateProfile | None:
 def godmode_weights(code: str) -> dict:
     profile = get_state_profile(code)
     if not profile:
-        return {}
+        normalized = code.upper()
+        return {
+            "error": f"No profile found for state '{normalized}'",
+            "supported_states": sorted(STATE_PROFILES.keys()),
+        }
     return {
         "mirror_weight": profile.mirror_level,
         "date_weight": profile.date_use,

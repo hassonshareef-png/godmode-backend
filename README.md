@@ -67,7 +67,7 @@ Use the command in `Procfile` and configure all production variables below. Atta
 1. Create the God and Universe Payment Links in Stripe.
 2. Configure the two `STRIPE_PAYMENT_LINK_*` variables with those URLs.
 3. Add a Stripe webhook endpoint pointing to `https://<backend-host>/billing/webhook`.
-4. Subscribe the endpoint to `checkout.session.completed`.
+4. Subscribe the endpoint to `checkout.session.completed` and `checkout.session.async_payment_succeeded`.
 5. Store that endpoint's signing secret as `STRIPE_WEBHOOK_SECRET`.
 6. Ensure each Checkout Session supplies the authenticated customer email and tier metadata used by the backend. The checkout endpoint appends a `client_reference_id` and prefilled email to the configured Payment Link.
 
