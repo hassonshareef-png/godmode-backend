@@ -1,6 +1,10 @@
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 import hmac
 import os
+import re
+import time
+from threading import Lock
 from typing import Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -9,7 +13,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from jose import ExpiredSignatureError, JWTError, jwt
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .auth import (
@@ -20,10 +26,11 @@ from .auth import (
     hash_password,
     verify_password,
 )
-from .database import Base, SessionLocal, engine
+from .database import Base, SessionLocal, _migrate_username_column, engine
 from .models import User
 
 Base.metadata.create_all(bind=engine)
+_migrate_username_column()
 
 app = FastAPI(title="GODMODE Backend", version="2.0.0")
 
@@ -47,23 +54,30 @@ app.add_middleware(
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
 DIRECTOR_PIN = os.getenv("DIRECTOR_PIN", "")
 
-# Owner director auto-provisioning (env-driven)
-OWNER_USERNAME = os.getenv("OWNER_USERNAME", "").strip().lower()
-OWNER_PASSWORD = os.getenv("OWNER_PASSWORD", "")
-OWNER_EMAIL = os.getenv("OWNER_EMAIL", "").strip().lower()
+
+def _get_owner_username() -> str:
+    return os.getenv("OWNER_USERNAME", "").strip().lower()
+
+
+def _get_owner_password() -> str:
+    return os.getenv("OWNER_PASSWORD", "")
 
 
 def _get_owner_email() -> str:
-    if OWNER_EMAIL:
-        return OWNER_EMAIL
-    if OWNER_USERNAME:
-        return f"{OWNER_USERNAME}@owner.local"
+    email = os.getenv("OWNER_EMAIL", "").strip().lower()
+    if email:
+        return email
+    username = _get_owner_username()
+    if username:
+        return f"{username}@owner.local"
     return ""
 
 
 def _ensure_owner_account() -> None:
     """Auto-provision the owner account as director tier at startup."""
-    if not OWNER_USERNAME or not OWNER_PASSWORD:
+    owner_username = _get_owner_username()
+    owner_password = _get_owner_password()
+    if not owner_username or not owner_password:
         return
     owner_email = _get_owner_email()
     if not owner_email:
@@ -71,7 +85,7 @@ def _ensure_owner_account() -> None:
     db = SessionLocal()
     try:
         owner = db.query(User).filter(User.email == owner_email).first()
-        owner_password_hash = hash_password(OWNER_PASSWORD)
+        owner_password_hash = hash_password(owner_password)
         if owner:
             owner.hashed_password = owner_password_hash
             owner.tier = "director"
@@ -93,6 +107,50 @@ def _ensure_owner_account() -> None:
 
 _ensure_owner_account()
 
+_USERNAME_PATTERN = re.compile(r"^[a-z0-9_]{3,32}$")
+_PASSWORD_PATTERN = re.compile(
+    r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,128}$"
+)
+_RATE_LIMITS: dict[str, tuple[int, int]] = {
+    "signup": (5, 600),
+    "login": (10, 60),
+    "forgot_password": (5, 600),
+    "reset_password": (5, 600),
+    "refresh": (20, 60),
+}
+_request_counters: dict[str, deque] = defaultdict(deque)
+_request_counter_lock = Lock()
+
+
+def _rate_limit(action: str):
+    max_requests, window_seconds = _RATE_LIMITS[action]
+
+    def dependency(request: Request) -> None:
+        client_host = request.client.host if request.client else "unknown"
+        key = f"{action}:{client_host}"
+        now = time.monotonic()
+        with _request_counter_lock:
+            attempts = _request_counters[key]
+            while attempts and now - attempts[0] >= window_seconds:
+                attempts.popleft()
+            if len(attempts) >= max_requests:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many requests. Please try again later.",
+                )
+            attempts.append(now)
+
+    return dependency
+
+
+def _validate_password_strength(password: str) -> str:
+    if not _PASSWORD_PATTERN.fullmatch(password):
+        raise ValueError(
+            "Password must be 8-128 characters and include uppercase, lowercase, "
+            "a digit, and a special character"
+        )
+    return password
+
 
 def get_db():
     db = SessionLocal()
@@ -103,14 +161,54 @@ def get_db():
 
 
 class SignupRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     tier: Literal["basic", "god", "universe"] = "basic"
 
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        username = value.strip().lower()
+        if not _USERNAME_PATTERN.fullmatch(username):
+            raise ValueError(
+                "Username must be 3-32 characters using only letters, digits, or underscores"
+            )
+        return username
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return _validate_password_strength(value)
+
 
 class LoginRequest(BaseModel):
-    email: str = Field(min_length=1, max_length=254)
+    identifier: str = Field(min_length=1, max_length=254)
     password: str = Field(min_length=8, max_length=128)
+
+    @model_validator(mode="before")
+    @classmethod
+    def support_email_field(cls, data):
+        """Accept legacy 'email' field as 'identifier' for backward compatibility."""
+        if isinstance(data, dict) and "identifier" not in data:
+            legacy = data.get("email") or data.get("username")
+            if legacy:
+                merged = dict(data)
+                merged.pop("email", None)
+                merged.pop("username", None)
+                merged["identifier"] = legacy
+                return merged
+        return data
+
+    @field_validator("identifier")
+    @classmethod
+    def normalize_identifier(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class RefreshRequest(BaseModel):
@@ -124,6 +222,11 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return _validate_password_strength(value)
 
 
 class DirectorPinRequest(BaseModel):
@@ -258,37 +361,74 @@ def basic_predict(state: str, game: Literal["P3", "P4"]):
 
 
 @app.post("/auth/signup", status_code=201)
-def signup(payload: SignupRequest, db: Session = Depends(get_db)):
+def signup(
+    payload: SignupRequest,
+    _: None = Depends(_rate_limit("signup")),
+    db: Session = Depends(get_db),
+):
     email = _normalize_email(str(payload.email))
-    if db.query(User).filter(User.email == email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
+    username = payload.username
+
+    existing = (
+        db.query(User)
+        .filter(
+            or_(
+                func.lower(User.email) == email,
+                func.lower(User.username) == username,
+            )
+        )
+        .first()
+    )
+    if existing:
+        if existing.email and existing.email.lower() == email:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(status_code=400, detail="Username already taken")
 
     # Paid access is never granted from a client-selected signup tier.
     user = User(
+        username=username,
         email=email,
         hashed_password=hash_password(payload.password),
         tier="basic",
         has_god_mode=False,
         has_universe_mode=False,
     )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Unable to create account") from exc
     result = _token_pair(user)
-    result.update({"id": user.id, "email": user.email, "message": "Signup successful"})
+    result.update({"id": user.id, "username": user.username, "email": user.email, "message": "Signup successful"})
     return result
 
 
 @app.post("/auth/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    identifier = _normalize_email(payload.email)
+def login(
+    payload: LoginRequest,
+    _: None = Depends(_rate_limit("login")),
+    db: Session = Depends(get_db),
+):
+    identifier = payload.identifier
+    owner_username = _get_owner_username()
     owner_email = _get_owner_email()
 
-    # Owner login: match by username, route to owner account
-    if OWNER_USERNAME and owner_email and identifier == OWNER_USERNAME:
+    # Owner login: match by configured owner username, route to owner account
+    if owner_username and owner_email and identifier == owner_username:
         user = db.query(User).filter(User.email == owner_email).first()
     else:
-        user = db.query(User).filter(User.email == identifier).first()
+        user = (
+            db.query(User)
+            .filter(
+                or_(
+                    func.lower(User.email) == identifier,
+                    func.lower(User.username) == identifier,
+                )
+            )
+            .first()
+        )
 
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -296,7 +436,11 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/auth/refresh")
-def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
+def refresh(
+    payload: RefreshRequest,
+    _: None = Depends(_rate_limit("refresh")),
+    db: Session = Depends(get_db),
+):
     token_data = _decode_token(payload.refresh_token, {"refresh"})
     if token_data.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
@@ -314,6 +458,7 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
 def me(user: User = Depends(get_current_user)):
     return {
         "id": user.id,
+        "username": user.username,
         "email": user.email,
         "tier": user.tier,
         "has_god_mode": user.has_god_mode,
@@ -323,7 +468,11 @@ def me(user: User = Depends(get_current_user)):
 
 
 @app.post("/auth/forgot-password")
-def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    _: None = Depends(_rate_limit("forgot_password")),
+    db: Session = Depends(get_db),
+):
     email = _normalize_email(str(payload.email))
     user = db.query(User).filter(User.email == email).first()
     response = {
@@ -342,7 +491,11 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
 
 
 @app.post("/auth/reset-password")
-def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+def reset_password(
+    payload: ResetPasswordRequest,
+    _: None = Depends(_rate_limit("reset_password")),
+    db: Session = Depends(get_db),
+):
     try:
         token_data = jwt.decode(payload.token, SECRET_KEY, algorithms=[ALGORITHM])
     except ExpiredSignatureError as exc:
