@@ -230,12 +230,21 @@ class AuthEndpointsTests(unittest.TestCase):
         )
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json()["strategy"], "3175")
+        # FormData with a valid JSON-encoded history list is also accepted
         multipart = self.client.post(
             "/director/3175",
             data={"history": '["123"]'},
             headers=self.bearer(token),
         )
-        self.assertEqual(multipart.status_code, 422)
+        self.assertEqual(multipart.status_code, 200)
+        self.assertEqual(multipart.json()["strategy"], "3175")
+        # FormData with invalid JSON must be rejected
+        bad_multipart = self.client.post(
+            "/director/3175",
+            data={"history": "not-json"},
+            headers=self.bearer(token),
+        )
+        self.assertEqual(bad_multipart.status_code, 422)
 
     def test_director_requires_valid_pin_and_token(self):
         self.assertEqual(
@@ -283,6 +292,47 @@ class AuthEndpointsTests(unittest.TestCase):
         self.assertEqual(self.client.get("/god/features", headers=headers).status_code, 403)
         self.assertEqual(
             self.client.get("/universe/features", headers=headers).status_code, 403
+        )
+
+    # ------------------------------------------------------------------
+    # Pick 3 / Pick 4 endpoints
+    # ------------------------------------------------------------------
+
+    def test_pick3_predict_returns_rundowns(self):
+        tokens = self.signup(username="pick3user").json()
+        headers = self.bearer(tokens["access_token"])
+        response = self.client.post("/pick3/predict", json={"number": "317"}, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["game"], "P3")
+        self.assertEqual(body["number"], "317")
+        self.assertIn("rundowns", body)
+        self.assertIn("317", body["rundowns"])
+        self.assertEqual(len(body["rundowns"]["317"]), 10)
+
+    def test_pick4_predict_returns_rundowns(self):
+        tokens = self.signup(username="pick4user").json()
+        headers = self.bearer(tokens["access_token"])
+        response = self.client.post("/pick4/predict", json={"number": "3175"}, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["game"], "P4")
+        self.assertEqual(body["number"], "3175")
+        self.assertIn("rundowns", body)
+        self.assertIn("3175", body["rundowns"])
+        self.assertEqual(len(body["rundowns"]["3175"]), 10)
+
+    def test_pick3_rejects_wrong_length(self):
+        tokens = self.signup(username="picklenuser").json()
+        headers = self.bearer(tokens["access_token"])
+        self.assertEqual(
+            self.client.post("/pick3/predict", json={"number": "1234"}, headers=headers).status_code,
+            422,
+        )
+
+    def test_pick_predict_requires_auth(self):
+        self.assertEqual(
+            self.client.post("/pick3/predict", json={"number": "317"}).status_code, 401
         )
 
     def test_admin_grant_unlocks_paid_route(self):
@@ -399,6 +449,18 @@ class AuthEndpointsTests(unittest.TestCase):
         self.assertEqual(
             allowed.headers.get("access-control-allow-origin"),
             "https://godmode-frontend-l.onrender.com",
+        )
+        github_pages = self.client.options(
+            "/auth/login",
+            headers={
+                "Origin": "https://hassonshareef-png.github.io",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        self.assertEqual(github_pages.status_code, 200)
+        self.assertEqual(
+            github_pages.headers.get("access-control-allow-origin"),
+            "https://hassonshareef-png.github.io",
         )
         rejected = self.client.options(
             "/auth/login",

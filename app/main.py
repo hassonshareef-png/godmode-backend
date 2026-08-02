@@ -1,6 +1,7 @@
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 import hmac
+import json
 import os
 import re
 import time
@@ -36,6 +37,7 @@ app = FastAPI(title="GODMODE Backend", version="2.0.0")
 
 DEFAULT_CORS_ORIGINS = (
     "https://godmode-frontend-l.onrender.com,"
+    "https://hassonshareef-png.github.io,"
     "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5500"
 )
 CORS_ORIGINS = [
@@ -235,6 +237,38 @@ class DirectorPinRequest(BaseModel):
 
 class DirectorHistoryRequest(BaseModel):
     history: list[str] = Field(default_factory=list, max_length=100)
+
+
+class PickRequest(BaseModel):
+    number: str = Field(min_length=3, max_length=4)
+
+    @field_validator("number")
+    @classmethod
+    def validate_number(cls, value: str) -> str:
+        if not re.fullmatch(r"\d{3,4}", value):
+            raise ValueError("number must be a 3- or 4-digit string")
+        return value
+
+
+_PICK3_PATTERNS = [
+    "063", "111", "123", "245", "285", "291",
+    "317", "369", "401", "730", "754", "927",
+    "952", "962", "972",
+]
+_PICK4_PATTERNS = [
+    "1111", "1212", "1231", "1919", "2452", "3175",
+    "3453", "3693", "4228", "4242", "6464", "6767",
+    "7907", "8908", "9797",
+]
+
+
+def _apply_rundown(base: str, pattern: str) -> list[str]:
+    results = []
+    current = base
+    for _ in range(10):
+        current = "".join(str((int(b) + int(p)) % 10) for b, p in zip(current, pattern))
+        results.append(current)
+    return results
 
 
 class PurchaseRequest(BaseModel):
@@ -552,15 +586,36 @@ def _is_director_token(token: str, db: Session) -> bool:
 
 
 @app.post("/director/3175")
-def director_3175(
-    payload: DirectorHistoryRequest,
+async def director_3175(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
     if not _is_director_token(token, db):
         raise HTTPException(status_code=401, detail="Director Mode requires PIN or director access")
 
-    history = payload.history[-20:]
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
+        form = await request.form()
+        history_raw = form.get("history", "[]")
+        try:
+            history_parsed = json.loads(history_raw)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail="Invalid JSON in history form field") from exc
+        if not isinstance(history_parsed, list):
+            raise HTTPException(status_code=422, detail="history must be a list")
+        history = [str(item) for item in history_parsed[:100]]
+    else:
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail="Invalid JSON body") from exc
+        try:
+            payload = DirectorHistoryRequest.model_validate(body)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        history = payload.history
+    history = history[-20:]
     seed = [3, 1, 7, 5]
     mirror = {0: 5, 1: 6, 2: 7, 3: 8, 4: 9, 5: 0, 6: 1, 7: 2, 8: 3, 9: 4}
     mirror_seed = [mirror[number] for number in seed]
@@ -654,6 +709,24 @@ def universe_predict(
         else ["1234", "3179", "5678", "8801", "9012", "2345", "6789", "4567", "7890", "0123"]
     )
     return {"mode": "universe", "state": state, "game": game, "numbers": numbers, "user_id": user.id}
+
+
+@app.post("/pick3/predict")
+def pick3_predict(payload: PickRequest, user: User = Depends(get_current_user)):
+    number = payload.number
+    if len(number) != 3:
+        raise HTTPException(status_code=422, detail="number must be exactly 3 digits for Pick 3")
+    rundowns = {pattern: _apply_rundown(number, pattern) for pattern in _PICK3_PATTERNS}
+    return {"game": "P3", "number": number, "rundowns": rundowns, "user_id": user.id}
+
+
+@app.post("/pick4/predict")
+def pick4_predict(payload: PickRequest, user: User = Depends(get_current_user)):
+    number = payload.number
+    if len(number) != 4:
+        raise HTTPException(status_code=422, detail="number must be exactly 4 digits for Pick 4")
+    rundowns = {pattern: _apply_rundown(number, pattern) for pattern in _PICK4_PATTERNS}
+    return {"game": "P4", "number": number, "rundowns": rundowns, "user_id": user.id}
 
 
 @app.post("/billing/checkout")
