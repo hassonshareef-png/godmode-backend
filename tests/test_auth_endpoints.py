@@ -1,23 +1,37 @@
 import importlib
 import os
 import unittest
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
-from fastapi import HTTPException
-from starlette.requests import Request
+from fastapi.testclient import TestClient
+from jose import jwt
 
 
 class AuthEndpointsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["DATABASE_URL"] = "sqlite:////tmp/godmode_backend_test.db"
-        os.environ["SECRET_KEY"] = "test-secret-key"
-        os.environ["OWNER_USERNAME"] = "hass"
-        os.environ["OWNER_PASSWORD"] = "ownerpass123"
-        os.environ["OWNER_EMAIL"] = "owner@example.com"
-
+        os.environ.update(
+            {
+                "DATABASE_URL": "sqlite:////tmp/godmode_backend_test.db",
+                "SECRET_KEY": "test-secret-key",
+                "DIRECTOR_PIN": "8118",
+                "ADMIN_KEY": "admin-secret-key",
+                "EXPOSE_RESET_TOKEN": "true",
+                "STRIPE_PAYMENT_LINK_GOD": "https://buy.stripe.com/test_god",
+                "STRIPE_PAYMENT_LINK_UNIVERSE": "https://buy.stripe.com/test_universe",
+                "STRIPE_WEBHOOK_SECRET": "whsec_test",
+                "CORS_ORIGINS": "https://godmode-frontend-l.onrender.com,http://localhost:5173",
+            }
+        )
+        import app.auth
+        import app.database
         import app.main
 
+        importlib.reload(app.auth)
+        importlib.reload(app.database)
         cls.main_module = importlib.reload(app.main)
+        cls.client = TestClient(cls.main_module.app)
         cls._clear_users()
 
     @classmethod
@@ -38,126 +52,251 @@ class AuthEndpointsTests(unittest.TestCase):
 
     def setUp(self):
         self._clear_users()
-        self.main_module.ensure_owner_account()
-        # Reset in-memory rate limit counters so tests don't interfere with each other
-        self.main_module.limiter.reset()
-        self.db = self.main_module.SessionLocal()
 
-    def tearDown(self):
-        self.db.close()
-
-    def _signup(self, email="user@example.com", pw_text="cred12345", tier="god"):
-        payload = self.main_module.SignupRequest.model_validate(
-            {"email": email, "password": pw_text, "tier": tier}
-        )
-        return self.main_module.signup(payload, self._request(), db=self.db)
-
-    def _login(self, email="user@example.com", pw_text="cred12345"):
-        payload = self.main_module.LoginRequest.model_validate(
-            {"email": email, "password": pw_text}
-        )
-        return self.main_module.login(payload, self._request(), db=self.db)
-
-    def _request(self):
-        return Request(
-            {
-                "type": "http",
-                "method": "POST",
-                "path": "/",
-                "headers": [],
-                "client": ("127.0.0.1", 12345),
-            }
+    def signup(self, email="user@example.com", password="cred12345", tier="basic"):
+        return self.client.post(
+            "/auth/signup", json={"email": email, "password": password, "tier": tier}
         )
 
-    def test_ping_endpoint(self):
-        body = self.main_module.ping()
-        self.assertTrue(body["pong"])
-        self.assertIn("timestamp", body)
+    def login(self, email="user@example.com", password="cred12345"):
+        return self.client.post("/auth/login", json={"email": email, "password": password})
 
-    def test_get_current_user_invalid_token(self):
-        with self.assertRaises(HTTPException) as ctx:
-            self.main_module.get_current_user(token="invalid-token", db=self.db)
-        self.assertEqual(ctx.exception.status_code, 401)
+    @staticmethod
+    def bearer(token):
+        return {"Authorization": f"Bearer {token}"}
 
-    def test_get_current_user_valid_token(self):
-        user = self._signup(email="me@example.com", pw_text="cred56789", tier="universe")
-        login = self._login(email="me@example.com", pw_text="cred56789")
-        token = login["access_token"]
+    def test_health_and_ping(self):
+        self.assertEqual(self.client.get("/health").json(), {"status": "ok"})
+        self.assertTrue(self.client.get("/ping").json()["pong"])
 
-        current_user = self.main_module.get_current_user(token=token, db=self.db)
-        me = self.main_module.me(user=current_user)
-        self.assertEqual(me["id"], user["id"])
-        self.assertEqual(me["email"], "me@example.com")
-        self.assertEqual(me["tier"], "universe")
+    def test_basic_prediction_contract(self):
+        missing = self.client.get("/basic/predict")
+        self.assertEqual(missing.status_code, 422)
+        result = self.client.get("/basic/predict", params={"state": "NY", "game": "P3"})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()["state"], "NY")
+        self.assertEqual(result.json()["game"], "P3")
 
-    def test_forgot_and_reset_password_flow(self):
-        self._signup(email="reset@example.com", pw_text="cred56789")
+    def test_signup_never_grants_paid_access_from_client_tier(self):
+        for selected_tier in ("god", "universe"):
+            response = self.signup(email=f"{selected_tier}@example.com", tier=selected_tier)
+            self.assertEqual(response.status_code, 201)
+            body = response.json()
+            self.assertEqual(body["tier"], "basic")
+            self.assertFalse(body["has_god_mode"])
+            self.assertFalse(body["has_universe_mode"])
+            self.assertIn("access_token", body)
+            self.assertIn("refresh_token", body)
 
-        forgot_payload = self.main_module.ForgotPasswordRequest(email="reset@example.com")
-        forgot = self.main_module.forgot_password(forgot_payload, self._request(), db=self.db)
+    def test_signup_normalizes_email_and_rejects_duplicates(self):
+        first = self.signup(email="User@Example.com")
+        self.assertEqual(first.status_code, 201)
+        duplicate = self.signup(email="user@example.com")
+        self.assertEqual(duplicate.status_code, 400)
+
+    def test_login_me_and_refresh_flow(self):
+        self.assertEqual(self.signup().status_code, 201)
+        login = self.login()
+        self.assertEqual(login.status_code, 200)
+        tokens = login.json()
+        me = self.client.get("/auth/me", headers=self.bearer(tokens["access_token"]))
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.json()["email"], "user@example.com")
+
+        refreshed = self.client.post(
+            "/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        )
+        self.assertEqual(refreshed.status_code, 200)
+        self.assertIn("access_token", refreshed.json())
+        rejected = self.client.post(
+            "/auth/refresh", json={"refresh_token": tokens["access_token"]}
+        )
+        self.assertEqual(rejected.status_code, 401)
+
+    def test_invalid_login_and_missing_auth(self):
+        self.signup()
+        self.assertEqual(self.login(password="wrongpass").status_code, 401)
+        self.assertEqual(self.client.get("/auth/me").status_code, 401)
         self.assertEqual(
-            forgot,
-            {
-                "message": "If this email is registered, a password reset link has been sent."
+            self.client.get("/auth/me", headers=self.bearer("invalid")).status_code, 401
+        )
+
+    def test_forgot_password_is_non_enumerating_and_reset_works(self):
+        self.signup(email="reset@example.com", password="cred56789")
+        missing = self.client.post("/auth/forgot-password", json={"email": "missing@example.com"})
+        known = self.client.post("/auth/forgot-password", json={"email": "reset@example.com"})
+        self.assertEqual(missing.status_code, 200)
+        self.assertEqual(known.status_code, 200)
+        self.assertEqual(missing.json()["message"], known.json()["message"])
+        reset_token = known.json()["reset_token"]
+        reset = self.client.post(
+            "/auth/reset-password",
+            json={"token": reset_token, "new_password": "newcred123"},
+        )
+        self.assertEqual(reset.status_code, 200)
+        self.assertEqual(
+            self.login(email="reset@example.com", password="newcred123").status_code, 200
+        )
+
+    def test_reset_rejects_access_token(self):
+        tokens = self.signup().json()
+        response = self.client.post(
+            "/auth/reset-password",
+            json={"token": tokens["access_token"], "new_password": "newcred123"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_director_json_contract_and_multipart_validation(self):
+        access = self.client.post("/director/access", json={"pin": "8118"})
+        self.assertEqual(access.status_code, 200)
+        token = access.json()["access_token"]
+        result = self.client.post(
+            "/director/3175",
+            json={"history": ["123", "456", "789"]},
+            headers=self.bearer(token),
+        )
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()["strategy"], "3175")
+        multipart = self.client.post(
+            "/director/3175",
+            data={"history": '["123"]'},
+            headers=self.bearer(token),
+        )
+        self.assertEqual(multipart.status_code, 422)
+
+    def test_director_requires_valid_pin_and_token(self):
+        self.assertEqual(
+            self.client.post("/director/access", json={"pin": "0000"}).status_code, 401
+        )
+        self.assertEqual(
+            self.client.post("/director/3175", json={"history": []}).status_code, 401
+        )
+
+    def test_paid_routes_require_entitlement(self):
+        tokens = self.signup().json()
+        headers = self.bearer(tokens["access_token"])
+        self.assertEqual(self.client.get("/god/features", headers=headers).status_code, 403)
+        self.assertEqual(
+            self.client.get("/universe/features", headers=headers).status_code, 403
+        )
+
+    def test_admin_grant_unlocks_paid_route(self):
+        tokens = self.signup().json()
+        granted = self.client.post(
+            "/admin/grant-purchase",
+            params={"email": "user@example.com", "tier": "god", "admin_key": "admin-secret-key"},
+        )
+        self.assertEqual(granted.status_code, 200)
+        self.assertTrue(granted.json()["has_god_mode"])
+        self.assertEqual(
+            self.client.get(
+                "/god/predict",
+                params={"state": "NY", "game": "P3"},
+                headers=self.bearer(tokens["access_token"]),
+            ).status_code,
+            200,
+        )
+
+    def test_admin_rejects_invalid_key(self):
+        self.signup()
+        response = self.client.post(
+            "/admin/grant-purchase",
+            params={"email": "user@example.com", "tier": "god", "admin_key": "wrong"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_admin_broadcast_acknowledges_delivery_not_implemented(self):
+        self.signup()
+        response = self.client.post(
+            "/admin/broadcast",
+            json={
+                "subject": "maintenance",
+                "message": "Heads up",
+                "admin_key": "admin-secret-key",
             },
         )
-        user_obj = self.db.query(self.main_module.User).filter_by(email="reset@example.com").first()
-        token = user_obj.reset_token
-        self.assertIsNotNone(token)
-
-        reset_payload = self.main_module.ResetPasswordRequest(
-            token=token, new_password="newcred123"
-        )
-        reset = self.main_module.reset_password(reset_payload, self._request(), db=self.db)
-        self.assertEqual(reset["message"], "Password reset successful")
-        self.assertIsNone(user_obj.reset_token)
-
-        with self.assertRaises(HTTPException) as old_login_err:
-            self._login(email="reset@example.com", pw_text="cred56789")
-        self.assertEqual(old_login_err.exception.status_code, 401)
-
-        new_login = self._login(email="reset@example.com", pw_text="newcred123")
-        self.assertIn("access_token", new_login)
-
-    def test_forgot_password_unknown_email(self):
-        payload = self.main_module.ForgotPasswordRequest(email="missing@example.com")
-        body = self.main_module.forgot_password(payload, self._request(), db=self.db)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "accepted")
+        self.assertIn("email delivery not yet implemented", body["message"])
         self.assertEqual(
-            body,
-            {"message": "If this email is registered, a password reset link has been sent."},
+            body["note"],
+            "No emails were sent. Integrate an email provider to enable delivery.",
         )
 
-    def test_reset_rejects_non_reset_token(self):
-        self._signup(email="wrongtype@example.com", pw_text="cred56789")
-        login = self._login(email="wrongtype@example.com", pw_text="cred56789")
-        access_token = login["access_token"]
-
-        payload = self.main_module.ResetPasswordRequest(
-            token=access_token, new_password="newcred123"
+    def test_checkout_uses_signed_non_sensitive_reference(self):
+        tokens = self.signup().json()
+        response = self.client.post(
+            "/billing/checkout",
+            json={"tier": "god"},
+            headers=self.bearer(tokens["access_token"]),
         )
-        with self.assertRaises(HTTPException) as ctx:
-            self.main_module.reset_password(payload, self._request(), db=self.db)
-        self.assertEqual(ctx.exception.status_code, 400)
-        self.assertIn("type", ctx.exception.detail)
+        self.assertEqual(response.status_code, 200)
+        query = parse_qs(urlsplit(response.json()["checkout_url"]).query)
+        reference = query["client_reference_id"][0]
+        claims = jwt.decode(reference, "test-secret-key", algorithms=["HS256"])
+        self.assertEqual(claims["tier"], "god")
+        self.assertEqual(claims["type"], "purchase_ref")
+        self.assertNotIn("email", claims)
 
-    def test_password_reset_token_rejected_as_access_token(self):
-        self._signup(email="guard@example.com", pw_text="cred56789")
-        forgot_payload = self.main_module.ForgotPasswordRequest(email="guard@example.com")
-        self.main_module.forgot_password(forgot_payload, self._request(), db=self.db)
-        user_obj = self.db.query(self.main_module.User).filter_by(email="guard@example.com").first()
-        reset_token = user_obj.reset_token
+    def test_signed_stripe_webhook_grants_entitlement_idempotently(self):
+        signup_body = self.signup().json()
+        checkout = self.client.post(
+            "/billing/checkout",
+            json={"tier": "universe"},
+            headers=self.bearer(signup_body["access_token"]),
+        ).json()
+        reference = parse_qs(urlsplit(checkout["checkout_url"]).query)["client_reference_id"][0]
+        event = {
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "payment_status": "paid",
+                    "client_reference_id": reference,
+                }
+            },
+        }
+        with patch.object(
+            self.main_module.stripe.Webhook, "construct_event", return_value=event
+        ):
+            first = self.client.post(
+                "/billing/webhook", content=b"{}", headers={"Stripe-Signature": "test"}
+            )
+            second = self.client.post(
+                "/billing/webhook", content=b"{}", headers={"Stripe-Signature": "test"}
+            )
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.json()["handled"])
+        self.assertEqual(second.status_code, 200)
+        refreshed = self.login().json()
+        self.assertTrue(refreshed["has_universe_mode"])
 
-        with self.assertRaises(HTTPException) as ctx:
-            self.main_module.get_current_user(token=reset_token, db=self.db)
-        self.assertEqual(ctx.exception.status_code, 401)
+    def test_webhook_requires_signature(self):
+        self.assertEqual(self.client.post("/billing/webhook", content=b"{}").status_code, 400)
 
-    def test_owner_can_login_with_username_and_get_director_tier(self):
-        login = self._login(email="hass", pw_text="ownerpass123")
-        self.assertEqual(login["tier"], "director")
-        current_user = self.main_module.get_current_user(token=login["access_token"], db=self.db)
-        me = self.main_module.me(user=current_user)
-        self.assertEqual(me["tier"], "director")
-        self.assertEqual(me["email"], "owner@example.com")
+    def test_cors_allows_frontend_and_rejects_untrusted_origin(self):
+        allowed = self.client.options(
+            "/auth/login",
+            headers={
+                "Origin": "https://godmode-frontend-l.onrender.com",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(
+            allowed.headers.get("access-control-allow-origin"),
+            "https://godmode-frontend-l.onrender.com",
+        )
+        rejected = self.client.options(
+            "/auth/login",
+            headers={
+                "Origin": "https://example.invalid",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        self.assertNotEqual(
+            rejected.headers.get("access-control-allow-origin"), "https://example.invalid"
+        )
 
 
 if __name__ == "__main__":

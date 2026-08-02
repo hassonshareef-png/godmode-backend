@@ -1,3 +1,12 @@
+"""
+UNUSED LEGACY MODULE.
+Firebase was removed from this project. This file is kept only as a placeholder.
+Do NOT import or use this module.
+If you previously had a Firebase service-account JSON committed to this repo,
+revoke and rotate those credentials immediately — deleting from Git does not
+invalidate leaked keys.
+"""
+
 import os
 
 firebaseConfig = {

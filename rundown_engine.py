@@ -1,0 +1,437 @@
+# rundown_engine.py
+# GODMODE++ Unified Rundown Engine + FastAPI Backend
+# Pick 3 + Pick 4 + Multi-State + Universe Mode + Director Mode + API Auto-Download
+# ALL IN ONE FILE
+
+from typing import TypedDict, List, Dict, Callable
+from collections import defaultdict
+import requests
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+# ---------------------------------------------------------
+# FASTAPI SETUP
+# ---------------------------------------------------------
+
+app = FastAPI(title="GODMODE++ Lottery Engine")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------------------------------------------------------
+# DATA MODEL
+# ---------------------------------------------------------
+
+class Draw(TypedDict):
+    date: str
+    state: str
+    draw: str
+
+DrawList = List[Draw]
+
+# ---------------------------------------------------------
+# GENERIC RUNDOWN MATH
+# ---------------------------------------------------------
+
+def apply_rundown_pattern(base: str, pattern: str, lines: int = 10) -> List[str]:
+    results: List[str] = []
+    current = base
+
+    for _ in range(lines):
+        new_digits = []
+        for b, p in zip(current, pattern):
+            nb = (int(b) + int(p)) % 10
+            new_digits.append(str(nb))
+        current = "".join(new_digits)
+        results.append(current)
+
+    return results
+
+def make_rundown(pattern: str):
+    def _rd(n: str) -> List[str]:
+        return apply_rundown_pattern(n, pattern, lines=10)
+    return _rd
+
+RundownFunc = Callable[[str], List[str]]
+
+# ---------------------------------------------------------
+# PICK 4 RUNDOWNS
+# ---------------------------------------------------------
+
+PICK4_RUNDOWNS: Dict[str, RundownFunc] = {
+    "1111": make_rundown("1111"),
+    "1212": make_rundown("1212"),
+    "1231": make_rundown("1231"),
+    "1919": make_rundown("1919"),
+    "2452": make_rundown("2452"),
+    "3175": make_rundown("3175"),
+    "3453": make_rundown("3453"),
+    "3693": make_rundown("3693"),
+    "4228": make_rundown("4228"),
+    "4242": make_rundown("4242"),
+    "6464": make_rundown("6464"),
+    "6767": make_rundown("6767"),
+    "7907": make_rundown("7907"),
+    "8908": make_rundown("8908"),
+    "9797": make_rundown("9797"),
+}
+
+# ---------------------------------------------------------
+# PICK 3 RUNDOWNS
+# ---------------------------------------------------------
+
+PICK3_RUNDOWNS: Dict[str, RundownFunc] = {
+    "063": make_rundown("063"),
+    "111": make_rundown("111"),
+    "123": make_rundown("123"),
+    "245": make_rundown("245"),
+    "285": make_rundown("285"),
+    "291": make_rundown("291"),
+    "317": make_rundown("317"),
+    "369": make_rundown("369"),
+    "401": make_rundown("401"),
+    "730": make_rundown("730"),
+    "754": make_rundown("754"),
+    "927": make_rundown("927"),
+    "952": make_rundown("952"),
+    "962": make_rundown("962"),
+    "972": make_rundown("972"),
+}
+
+# ---------------------------------------------------------
+# HELPERS
+# ---------------------------------------------------------
+
+def is_box(pred: str, actual: str) -> bool:
+    return sorted(pred) == sorted(actual)
+
+def detect_game_type(draw: str) -> str:
+    if len(draw) == 3:
+        return "PICK3"
+    elif len(draw) == 4:
+        return "PICK4"
+    return "UNKNOWN"
+
+def get_rundown_set(game_type: str) -> Dict[str, RundownFunc]:
+    if game_type == "PICK3":
+        return PICK3_RUNDOWNS
+    elif game_type == "PICK4":
+        return PICK4_RUNDOWNS
+    return {}
+
+# ---------------------------------------------------------
+# UNIFIED HIT EVALUATION
+# ---------------------------------------------------------
+
+def evaluate_rundowns(draws: DrawList) -> List[Dict[str, str]]:
+    records: List[Dict[str, str]] = []
+
+    for i in range(len(draws) - 1):
+        current = draws[i]
+        next_draw = draws[i + 1]["draw"]
+
+        game_type = detect_game_type(current["draw"])
+        rundowns = get_rundown_set(game_type)
+
+        for name, func in rundowns.items():
+            preds = func(current["draw"])
+            hit_type = "miss"
+
+            for p in preds:
+                if p == next_draw:
+                    hit_type = "straight"
+                    break
+                elif is_box(p, next_draw) and hit_type != "straight":
+                    hit_type = "box"
+
+            records.append({
+                "state": current["state"],
+                "game": game_type,
+                "date": current["date"],
+                "rundown": name,
+                "current_draw": current["draw"],
+                "next_draw": next_draw,
+                "hit_type": hit_type,
+            })
+
+    return records
+
+# ---------------------------------------------------------
+# STRENGTH INDEX
+# ---------------------------------------------------------
+
+def build_strength_index(records: List[Dict[str, str]], game_type: str) -> Dict[str, Dict[str, int]]:
+    index: Dict[str, Dict[str, int]] = defaultdict(lambda: {
+        "straight": 0,
+        "box": 0,
+        "miss": 0,
+    })
+
+    for rec in records:
+        if rec["game"] != game_type:
+            continue
+        r = rec["rundown"]
+        index[r][rec["hit_type"]] += 1
+
+    return index
+
+# ---------------------------------------------------------
+# AUTO-SELECT RUNDOWN
+# ---------------------------------------------------------
+
+def auto_select_rundown(draws: DrawList) -> Dict[str, str]:
+    if len(draws) < 2:
+        return {"error": "Not enough draw data"}
+
+    last = draws[-2]
+    current = draws[-1]
+
+    target = current["draw"]
+    base = last["draw"]
+
+    game_type = detect_game_type(base)
+    rundowns = get_rundown_set(game_type)
+
+    for name, func in rundowns.items():
+        preds = func(base)
+        for p in preds:
+            if p == target:
+                return {
+                    "rundown": name,
+                    "hit": p,
+                    "date": current["date"],
+                    "state": current["state"],
+                    "game": game_type,
+                }
+
+    return {
+        "rundown": "none",
+        "hit": "none",
+        "date": current["date"],
+        "state": current["state"],
+        "game": game_type,
+    }
+
+# ---------------------------------------------------------
+# NEXT PREDICTION
+# ---------------------------------------------------------
+
+def next_prediction(draws: DrawList) -> Dict[str, str]:
+    auto = auto_select_rundown(draws)
+
+    if auto.get("rundown") == "none":
+        return {
+            "prediction": "none",
+            "rundown": "none",
+            "type": "none"
+        }
+
+    rd = auto["rundown"]
+    latest = draws[-1]["draw"]
+    game_type = detect_game_type(latest)
+    rundowns = get_rundown_set(game_type)
+
+    preds = rundowns[rd](latest)
+    next_straight = preds[0]
+
+    return {
+        "prediction": next_straight,
+        "rundown": rd,
+        "type": "straight_candidate",
+        "game": game_type,
+        "state": draws[-1]["state"],
+        "date": draws[-1]["date"],
+    }
+
+# ---------------------------------------------------------
+# MULTI-STATE SUPPORT
+# ---------------------------------------------------------
+
+ALL_STATES: Dict[str, DrawList] = {}
+
+def load_state(state: str) -> DrawList:
+    return ALL_STATES.get(state, [])
+
+def run_state(state: str) -> Dict[str, Dict]:
+    draws = load_state(state)
+    if not draws:
+        return {"error": f"State '{state}' not found or has no data."}
+    return build_ui_json(draws)
+
+# ---------------------------------------------------------
+# SAMPLE DATASETS (NJ, NY, GA, FL, TX)
+# ---------------------------------------------------------
+
+NJ_2026: DrawList = [
+    {"date": "2026-03-26", "state": "NJ", "draw": "2611"},
+    {"date": "2026-03-27", "state": "NJ", "draw": "8034"},
+    {"date": "2026-03-28", "state": "NJ", "draw": "8379"},
+    {"date": "2026-03-29", "state": "NJ", "draw": "8159"},
+    {"date": "2026-03-30", "state": "NJ", "draw": "9461"},
+    {"date": "2026-03-31", "state": "NJ", "draw": "7072"},
+    {"date": "2026-04-01", "state": "NJ", "draw": "3886"},
+    {"date": "2026-04-02", "state": "NJ", "draw": "9071"},
+    {"date": "2026-04-03", "state": "NJ", "draw": "7701"},
+    {"date": "2026-04-04", "state": "NJ", "draw": "3959"},
+    {"date": "2026-04-05", "state": "NJ", "draw": "6274"},
+    {"date": "2026-04-06", "state": "NJ", "draw": "8585"},
+    {"date": "2026-04-07", "state": "NJ", "draw": "5869"},
+    {"date": "2026-04-08", "state": "NJ", "draw": "7804"},
+    {"date": "2026-04-09", "state": "NJ", "draw": "7591"},
+    {"date": "2026-04-10", "state": "NJ", "draw": "7235"},
+    {"date": "2026-04-11", "state": "NJ", "draw": "5894"},
+    {"date": "2026-04-12", "state": "NJ", "draw": "2916"},
+    {"date": "2026-04-13", "state": "NJ", "draw": "2538"},
+    {"date": "2026-04-14", "state": "NJ", "draw": "2803"},
+    {"date": "2026-04-15", "state": "NJ", "draw": "3304"},
+    {"date": "2026-04-16", "state": "NJ", "draw": "0063"},
+    {"date": "2026-04-17", "state": "NJ", "draw": "8073"},
+    {"date": "2026-04-18", "state": "NJ", "draw": "3634"},
+    {"date": "2026-04-19", "state": "NJ", "draw": "1169"},
+    {"date": "2026-04-20", "state": "NJ", "draw": "7318"},
+    {"date": "2026-04-21", "state": "NJ", "draw": "5935"},
+    {"date": "2026-04-22", "state": "NJ", "draw": "4876"},
+    {"date": "2026-04-23", "state": "NJ", "draw": "0973"},
+    {"date": "2026-04-24", "state": "NJ", "draw": "4017"},
+    {"date": "2026-04-25", "state": "NJ", "draw": "5080"},
+    {"date": "2026-04-26", "state": "NJ", "draw": "3665"},
+    {"date": "2026-04-27", "state": "NJ", "draw": "4187"},
+    {"date": "2026-04-28", "state": "NJ", "draw": "5876"},
+    {"date": "2026-04-29", "state": "NJ", "draw": "8330"},
+    {"date": "2026-04-30", "state": "NJ", "draw": "2205"},
+    {"date": "2026-05-01", "state": "NJ", "draw": "6327"},
+    {"date": "2026-05-02", "state": "NJ", "draw": "4439"},
+    {"date": "2026-05-03", "state": "NJ", "draw": "3748"},
+    {"date": "2026-05-04", "state": "NJ", "draw": "2608"},
+    {"date": "2026-05-05", "state": "NJ", "draw": "8817"},
+]
+
+NY_2026: DrawList = [
+    {"date": "2026-03-01", "state": "NY", "draw": "573"},
+    {"date": "2026-03-02", "state": "NY", "draw": "880"},
+    {"date": "2026-03-03", "state": "NY", "draw": "197"},
+    {"date": "2026-03-04", "state": "NY", "draw": "462"},
+]
+
+GA_2026: DrawList = [
+    {"date": "2026-03-01", "state": "GA", "draw": "317"},
+    {"date": "2026-03-02", "state": "GA", "draw": "880"},
+    {"date": "2026-03-03", "state": "GA", "draw": "197"},
+]
+
+FL_2026: DrawList = [
+    {"date": "2026-03-01", "state": "FL", "draw": "754"},
+    {"date": "2026-03-02", "state": "FL", "draw": "927"},
+    {"date": "2026-03-03", "state": "FL", "draw": "952"},
+]
+
+TX_2026: DrawList = [
+    {"date": "2026-03-01", "state": "TX", "draw": "972"},
+    {"date": "2026-03-02", "state": "TX", "draw": "063"},
+    {"date": "2026-03-03", "state": "TX", "draw": "317"},
+]
+
+ALL_STATES["NJ"] = NJ_2026
+ALL_STATES["NY"] = NY_2026
+ALL_STATES["GA"] = GA_2026
+ALL_STATES["FL"] = FL_2026
+ALL_STATES["TX"] = TX_2026
+
+# ---------------------------------------------------------
+# API AUTO-DOWNLOAD HOOK
+# ---------------------------------------------------------
+
+def fetch_draws_from_api(state: str, url: str) -> DrawList:
+    try:
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        draws: DrawList = []
+        for item in data:
+            draws.append({
+                "date": item["date"],
+                "state": item.get("state", state),
+                "draw": item["draw"],
+            })
+        return draws
+    except Exception:
+        return []
+
+# ---------------------------------------------------------
+# UNIVERSE MODE (GLOBAL FUSION)
+# ---------------------------------------------------------
+
+def universe_strength() -> Dict[str, Dict[str, Dict[str, int]]]:
+    all_records: List[Dict[str, str]] = []
+    for state, draws in ALL_STATES.items():
+        recs = evaluate_rundowns(draws)
+        all_records.extend(recs)
+
+    return {
+        "PICK3": build_strength_index(all_records, "PICK3"),
+        "PICK4": build_strength_index(all_records, "PICK4"),
+    }
+
+# ---------------------------------------------------------
+# DIRECTOR MODE (STATE-TO-STATE PATTERN TRACKING)
+# ---------------------------------------------------------
+
+def director_mode() -> Dict[str, Dict[str, Dict[str, int]]]:
+    result: Dict[str, Dict[str, Dict[str, int]]] = {}
+
+    for state, draws in ALL_STATES.items():
+        recs = evaluate_rundowns(draws)
+        result[state] = {
+            "PICK3": build_strength_index(recs, "PICK3"),
+            "PICK4": build_strength_index(recs, "PICK4"),
+        }
+
+    return result
+
+# ---------------------------------------------------------
+# UI JSON OUTPUT
+# ---------------------------------------------------------
+
+def build_ui_json(draws: DrawList) -> Dict[str, Dict]:
+    auto = auto_select_rundown(draws)
+    next_pred = next_prediction(draws)
+    records = evaluate_rundowns(draws)
+    game_type = auto.get("game", detect_game_type(draws[-1]["draw"]))
+    strength = build_strength_index(records, game_type)
+
+    return {
+        "autoSelect": auto,
+        "nextPrediction": next_pred,
+        "strengthIndex": strength,
+    }
+
+# ---------------------------------------------------------
+# FASTAPI ENDPOINTS
+# ---------------------------------------------------------
+
+@app.get("/state/{state}")
+def api_state(state: str):
+    return run_state(state.upper())
+
+@app.get("/universe")
+def api_universe():
+    return universe_strength()
+
+@app.get("/director")
+def api_director():
+    return director_mode()
+
+# ---------------------------------------------------------
+# MAIN TEST
+# ---------------------------------------------------------
+
+if __name__ == "__main__":
+    print("Running NJ unified engine test...")
+    print(build_ui_json(NJ_2026))
+    print("\nUniverse Mode:")
+    print(universe_strength())
+    print("\nDirector Mode:")
+    print(director_mode())

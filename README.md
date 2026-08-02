@@ -1,117 +1,88 @@
 # GODMODE Backend
 
-FastAPI backend for user authentication and tier access, designed to run locally with SQLite and in production on Render with PostgreSQL.
+FastAPI backend for authentication, tier-based prediction access, Director Mode, and Stripe Payment Link fulfillment.
 
-## Endpoints
+## Access model
 
-### Health & uptime
-- `GET /health` → `{ "status": "ok" }`
-- `GET /ping` → `{ "pong": true, "timestamp": "<UTC ISO timestamp>" }`
+| Mode | Authentication | Entitlement |
+|---|---|---|
+| Basic | Public | None |
+| God | Bearer access token | `has_god_mode` or Director user |
+| Universe | Bearer access token | `has_universe_mode` or Director user |
+| Director | Director bearer token | Valid `DIRECTOR_PIN` exchange |
 
-### Authentication
-- `POST /auth/signup`
-  - Body: `{ "email": "...", "password": "...", "tier": "god" }`
-  - Password must be at least 8 characters.
-- `POST /auth/login`
-  - Body: `{ "email": "...", "password": "..." }`
-  - Returns bearer token (valid 60 minutes).
-- `GET /auth/me` (requires bearer JWT in `Authorization` header)
-  - Returns current user: `{ "id": ..., "email": "...", "tier": "..." }`
-- `POST /auth/forgot-password`
-  - Body: `{ "email": "..." }`
-  - Stores a 15-minute reset token. In production, email this token to the user as a link.
-- `POST /auth/reset-password`
-  - Body: `{ "token": "...", "new_password": "..." }`
+A signup request can express an intended tier, but **never grants a paid entitlement**. Paid access is granted only after a verified Stripe webhook or a separately authenticated administrative operation.
 
-### Stripe
-- `POST /stripe/webhook`
-  - Receives and verifies Stripe webhook events.
-  - On `checkout.session.completed`, upgrades the user's tier based on the `tier` metadata key set on your Stripe Payment Link.
-  - Returns `{ "status": "ok" }`.
+## Core endpoints
 
-## Required environment variables
-
-| Variable | Description |
+| Method and path | Purpose |
 |---|---|
-| `SECRET_KEY` | Long random string for JWT signing. **Required.** Server will refuse to start without it. |
-| `DATABASE_URL` | Set on Render; local defaults to SQLite if unset. |
-| `ALLOWED_ORIGINS` | Comma-separated list of allowed frontend origins (e.g. `https://yourapp.com`). Defaults to `http://localhost:3000`. |
-| `STRIPE_SECRET_KEY` | Your Stripe secret key (`sk_live_...` or `sk_test_...`). |
-| `STRIPE_WEBHOOK_SECRET` | Signing secret from your Stripe webhook endpoint (`whsec_...`). |
-| `OWNER_USERNAME` | Optional owner login username. If set with `OWNER_PASSWORD`, owner account is auto-provisioned as `director`. |
-| `OWNER_PASSWORD` | Optional owner login password (set only in secure environment variables, never in code). |
-| `OWNER_EMAIL` | Optional owner account email. Defaults to `<OWNER_USERNAME>@owner.local` when omitted. |
+| `GET /health` | Service health check |
+| `GET /basic/predict?state=NY&game=P3` | Public basic prediction |
+| `POST /auth/signup` | Create a free account |
+| `POST /auth/login` | Return access and refresh tokens |
+| `POST /auth/refresh` | Exchange a refresh token for a new access token |
+| `GET /auth/me` | Return the current server-authoritative profile and entitlements |
+| `POST /director/access` | Exchange the configured Director PIN for a short-lived Director token |
+| `POST /director/3175` | Run the Director engine with a JSON `history` array |
+| `GET /god/predict` | Entitlement-protected God prediction |
+| `GET /universe/predict` | Entitlement-protected Universe prediction |
+| `POST /billing/checkout` | Return the configured authenticated Stripe Payment Link for `god` or `universe` |
+| `POST /billing/webhook` | Verify and fulfill supported Stripe events |
 
-Optional Firebase values if used:
-- `FIREBASE_API_KEY`
-- `FIREBASE_AUTH_DOMAIN`
-- `FIREBASE_PROJECT_ID`
-- `FIREBASE_APP_ID`
-- `FIREBASE_STORAGE_BUCKET`
-- `FIREBASE_MESSAGING_SENDER_ID`
-- `FIREBASE_MEASUREMENT_ID`
-
-## Stripe Payment Link setup
-
-For each payment link you want to wire to a tier upgrade:
-
-1. Open the link in **Stripe Dashboard → Payment Links**.
-2. Click **Edit** → scroll to **Metadata**.
-3. Add a key `tier` with the value matching one of: `god`, `universe`, `director`.
-4. Save the link.
-
-When a customer pays, Stripe sends a `checkout.session.completed` webhook. The backend matches the customer's email to their account and upgrades their tier automatically.
-
-Register your webhook URL in **Stripe Dashboard → Developers → Webhooks**:
-- Endpoint URL: `https://your-render-url.onrender.com/stripe/webhook`
-- Events to listen for: `checkout.session.completed`
-- Copy the **Signing secret** (`whsec_...`) and set it as `STRIPE_WEBHOOK_SECRET` in Render.
-
-## Owner access setup (director mode)
-
-To configure a private owner login without affecting normal user logins:
-
-1. Set these Render environment variables:
-   - `OWNER_USERNAME`
-   - `OWNER_PASSWORD`
-   - (optional) `OWNER_EMAIL`
-2. Restart the service.
-3. Log in through `POST /auth/login` using:
-   - `email`: your owner username (for example `hass`)
-   - `password`: your owner password
-
-When configured, the backend auto-creates/updates this owner account with tier `director`.
-
-## Existing database migration
-
-If you have an existing production database, run this SQL to add the Stripe customer ID column:
-
-```sql
-ALTER TABLE users ADD COLUMN stripe_customer_id VARCHAR;
-```
-
-## Render keep-alive (free tier)
-
-Use UptimeRobot (or similar) to `GET /ping` every 5 minutes to reduce cold starts/sleep behavior on free tier services.
+Interactive API documentation is available at `/docs`.
 
 ## Local development
 
-1. Create and activate a virtual environment.
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Set environment variables (at minimum `SECRET_KEY`):
-   ```bash
-   export SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-   ```
-4. Start server:
-   ```bash
-   uvicorn app.main:app --reload
-   ```
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn app.main:app --reload
+```
 
-## Running tests
+Load `.env` with your preferred process manager or export the variables in your shell. The SQLite fallback is suitable only for local development.
+
+## Production deployment on Render
+
+Use the command in `Procfile` and configure all production variables below. Attach a persistent PostgreSQL database; the default SQLite file is ephemeral on Render.
+
+| Variable | Requirement |
+|---|---|
+| `SECRET_KEY` | Required; long random JWT signing secret |
+| `ADMIN_KEY` | Required for administrative routes; distinct from `SECRET_KEY` |
+| `DIRECTOR_PIN` | Required to enable Director PIN exchange |
+| `DATABASE_URL` | Required in production; PostgreSQL connection URL |
+| `CORS_ORIGINS` | Comma-separated exact frontend origins |
+| `STRIPE_PAYMENT_LINK_GOD` | God-tier Stripe Payment Link |
+| `STRIPE_PAYMENT_LINK_UNIVERSE` | Universe-tier Stripe Payment Link |
+| `STRIPE_WEBHOOK_SECRET` | Stripe endpoint signing secret (`whsec_...`) |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional; defaults to 60 |
+| `REFRESH_TOKEN_EXPIRE_MINUTES` | Optional; defaults to 43,200 |
+| `EXPOSE_RESET_TOKEN` | Keep `false` in production |
+
+### Stripe setup
+
+1. Create the God and Universe Payment Links in Stripe.
+2. Configure the two `STRIPE_PAYMENT_LINK_*` variables with those URLs.
+3. Add a Stripe webhook endpoint pointing to `https://<backend-host>/billing/webhook`.
+4. Subscribe the endpoint to `checkout.session.completed` and `checkout.session.async_payment_succeeded`.
+5. Store that endpoint's signing secret as `STRIPE_WEBHOOK_SECRET`.
+6. Ensure each Checkout Session supplies the authenticated customer email and tier metadata used by the backend. The checkout endpoint appends a `client_reference_id` and prefilled email to the configured Payment Link.
+
+The webhook verifies Stripe's signature, ignores unpaid sessions, validates the requested tier, and records the processed event before upgrading the account so retries are idempotent.
+
+## Testing
 
 ```bash
-python -m unittest discover -q
+python -m pytest -q
 ```
+
+The regression suite covers signup entitlements, login and refresh-token types, CORS, prediction request parsing, Director authorization, administrative controls, and Stripe fulfillment.
+
+## Security actions required after deployment
+
+A Firebase service-account credential was previously tracked in the repository. Deleting the file from the latest commit does not invalidate the leaked key or erase Git history. **Revoke/rotate that key in Google Cloud/Firebase immediately**, remove it from repository history if the project will remain public, and rotate any other secret that was committed or exposed in deployment logs.
+
+Do not put Stripe secrets, admin keys, Director PINs, JWT keys, reset tokens, database files, or service-account JSON in Git. The included `.gitignore` and `.env.example` are intended to prevent recurrence.
