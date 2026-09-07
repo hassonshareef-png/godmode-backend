@@ -89,11 +89,13 @@ def _ensure_owner_account() -> None:
         owner = db.query(User).filter(User.email == owner_email).first()
         owner_password_hash = hash_password(owner_password)
         if owner:
+            owner.username = owner_username
             owner.hashed_password = owner_password_hash
             owner.tier = "director"
             owner.is_director = True
         else:
             owner = User(
+                username=owner_username,
                 email=owner_email,
                 hashed_password=owner_password_hash,
                 tier="director",
