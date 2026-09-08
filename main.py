@@ -140,10 +140,11 @@ def health():
 # ---------------------------
 @app.post("/login")
 def login(req: LoginRequest):
-    if req.email == "test@test.com" and req.password == "1234":
+if req.email == "hass" and req.password == "1234":
         return {"ok": True, "token": "godmode-token-001"}
 
-    raise HTTPException(status_code=401, detail="Invalid credentials")
+raise HTTPException(status_code=401, detail="Invalid credentials")
+
 
 # ---------------------------
 # PREDICTION ENDPOINT
