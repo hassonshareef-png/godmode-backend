@@ -202,6 +202,14 @@ def analyze(req: AnalyzeRequest):
 # DIRECTOR MODE — 3175 ENGINE
 # ---------------------------
 @app.post("/director/3175")
+async def director_mode(data: DirectorInput, user: User = Depends(get_current_user)):
+    # OWNER ONLY PROTECTION
+    if user.email != hassonshareef@gmail.com
+        raise HTTPException(status_code=403, detail="Director Mode is owner-only.")
+
+    # your director logic here
+
+@app.post("/director/3175")
 def director_3175(req: Director3175Request):
     try:
         history = req.history
